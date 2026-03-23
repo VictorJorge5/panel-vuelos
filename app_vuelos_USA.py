@@ -9,15 +9,7 @@ from FlightRadar24 import FlightRadar24API
 
 st.set_page_config(page_title="Aviator's Lens | Operations Control", page_icon="✈️", layout="wide")
 
-Inyectamos Tailwind CSS y estilos para simular la interfaz de cabina diseñada
-
-st.markdown("""
-
-
-
-
-
-""", unsafe_allow_html=True)
+st.markdown("""""", unsafe_allow_html=True)
 
 AEROPUERTOS = {
     "ATL": {"nombre": "Atlanta Hartsfield-Jackson", "coords": [33.6407, -84.4277]},
