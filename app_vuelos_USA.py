@@ -76,7 +76,6 @@ def calcular_distancia_nm(lat1, lon1, lat2, lon2):
 
 @st.cache_data(ttl=3600) 
 def obtener_predicciones_globales(iatas):
-    """Descarga de Open-Meteo TODAS las variables necesarias para la IA"""
     dicc_global = {}
     url = "https://api.open-meteo.com/v1/forecast"
     for apt in iatas:
@@ -84,7 +83,7 @@ def obtener_predicciones_globales(iatas):
             "latitude": AEROPUERTOS[apt]["coords"][0],
             "longitude": AEROPUERTOS[apt]["coords"][1],
             "hourly": "wind_speed_10m,wind_gusts_10m,visibility,cloudcover,temperature_2m,precipitation",
-            "wind_speed_unit": "kn", # La IA se entrenó en Nudos (KTS)
+            "wind_speed_unit": "kn",
             "timezone": "UTC"
         }
         try:
@@ -107,28 +106,19 @@ def obtener_predicciones_globales(iatas):
     return dicc_global
 
 def extraer_clima_hora(iata, hora_dt, dicc_meteo):
-    """Extrae las 5 variables climáticas para una hora concreta. 
-    Si el aeropuerto no es uno de nuestros 4 principales, asume 'clima de laboratorio' ideal."""
     clima_ideal = {'viento_kts': 0.0, 'rafagas_kts': 0.0, 'visib_m': 10000.0, 'nubes_pct': 0.0, 'temp_c': 15.0}
-    
-    if iata not in dicc_meteo:
-        return clima_ideal
-        
+    if iata not in dicc_meteo: return clima_ideal
     hora_redondeada = hora_dt.replace(minute=0, second=0, microsecond=0)
     hora_str = hora_redondeada.strftime("%Y-%m-%dT%H:00")
-    
     return dicc_meteo[iata].get(hora_str, clima_ideal)
 
 def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
-    """Núcleo del Machine Learning: Carga el clima origen-destino y evalúa el Árbol"""
     if not MODELO_IA:
         return "N/A", "Desconocida", "gray", "⚪ Error IA"
         
-    # Extraemos clima simultáneo (o asumimos ideal si viene de fuera)
     c_orig = extraer_clima_hora(origen, hora_vuelo_dt, dicc_meteo)
     c_dest = extraer_clima_hora(destino, hora_vuelo_dt, dicc_meteo)
     
-    # Codificadores seguros (Si viene de 'MAD' o vuela 'Iberia', le asignamos la clase 0 para no romper el programa)
     try:
         enc_orig = MODELO_IA['le_orig'].transform([origen])[0] if origen in MODELO_IA['le_orig'].classes_ else 0
         enc_dest = MODELO_IA['le_dest'].transform([destino])[0] if destino in MODELO_IA['le_dest'].classes_ else 0
@@ -136,24 +126,18 @@ def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     except:
         enc_orig, enc_dest, enc_carr = 0, 0, 0
 
-    # Armamos el DataFrame exacto que pide el modelo
     input_df = pd.DataFrame([[
         c_orig['viento_kts'], c_orig['rafagas_kts'], c_orig['visib_m'], c_orig['nubes_pct'], c_orig['temp_c'],
         c_dest['viento_kts'], c_dest['rafagas_kts'], c_dest['visib_m'], c_dest['nubes_pct'], c_dest['temp_c'],
         enc_orig, enc_dest, enc_carr
     ]], columns=MODELO_IA['features'])
     
-    # ¡Magia!
     prob = MODELO_IA['modelo'].predict_proba(input_df)[0][1]
     
-    # Sistema de Alertas
     texto_prob = f"{prob:.1%}"
-    if prob < 0.25:
-        return texto_prob, "BAJA", "green", "🟢 Baja"
-    elif prob < 0.60:
-        return texto_prob, "MEDIA", "orange", "🟡 Media"
-    else:
-        return texto_prob, "ALTA", "red", "🔴 Alta"
+    if prob < 0.25: return texto_prob, "BAJA", "green", "🟢 Baja"
+    elif prob < 0.60: return texto_prob, "MEDIA", "orange", "🟡 Media"
+    else: return texto_prob, "ALTA", "red", "🔴 Alta"
 
 @st.cache_data(ttl=300)
 def obtener_url_radar_lluvia():
@@ -161,10 +145,8 @@ def obtener_url_radar_lluvia():
         data = requests.get("https://api.rainviewer.com/public/weather-maps.json", timeout=5).json()
         latest_time = data['radar']['past'][-1]['time']
         return f"https://tilecache.rainviewer.com/v2/radar/{latest_time}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
-    except:
-        return None
+    except: return None
 
-# --- OTRAS UTILIDADES (Fotos y Metar) ---
 @st.cache_data(ttl=300)
 def obtener_metar_taf(iata):
     icao = f"K{iata}"
@@ -197,13 +179,50 @@ def obtener_mapa_aerolineas():
         return {a.get('ICAO', a.get('Code')): a['Name'] for a in aerolineas if 'Name' in a}
     except: return {}
 
+# --- EXTRACCIÓN SEGURA (BLINDAJE ANTICAÍDAS) ---
 def obtener_iata_seguro(nodo):
-    try: return nodo.get('code', {}).get('iata', 'N/A')
-    except: return 'N/A'
+    try:
+        if isinstance(nodo, dict) and isinstance(nodo.get('code'), dict):
+            return nodo['code'].get('iata', 'N/A')
+    except: pass
+    return 'N/A'
 
 def obtener_num_vuelo_seguro(vuelo_dict):
-    try: return vuelo_dict.get('flight', {}).get('identification', {}).get('number', {}).get('default', 'N/A')
-    except: return 'N/A'
+    try:
+        if isinstance(vuelo_dict, dict) and isinstance(vuelo_dict.get('flight'), dict):
+            ident = vuelo_dict['flight'].get('identification')
+            if isinstance(ident, dict) and isinstance(ident.get('number'), dict):
+                return ident['number'].get('default', 'N/A')
+    except: pass
+    return 'N/A'
+
+def obtener_aerolinea_segura(vuelo_dict):
+    try:
+        if isinstance(vuelo_dict, dict) and isinstance(vuelo_dict.get('flight'), dict):
+            airline = vuelo_dict['flight'].get('airline')
+            if isinstance(airline, dict):
+                return airline.get('name', 'N/A')
+    except: pass
+    return 'N/A'
+
+def obtener_carrier_iata_seguro(vuelo_dict):
+    try:
+        if isinstance(vuelo_dict, dict) and isinstance(vuelo_dict.get('flight'), dict):
+            airline = vuelo_dict['flight'].get('airline')
+            if isinstance(airline, dict) and isinstance(airline.get('code'), dict):
+                return airline['code'].get('iata', 'N/A')
+    except: pass
+    return 'N/A'
+
+def obtener_timestamp_seguro(vuelo_dict, tipo_vuelo, tipo_tiempo):
+    """tipo_vuelo: 'arrival' o 'departure', tipo_tiempo: 'scheduled', 'estimated', 'real'"""
+    try:
+        if isinstance(vuelo_dict, dict) and isinstance(vuelo_dict.get('flight'), dict):
+            time_node = vuelo_dict['flight'].get('time')
+            if isinstance(time_node, dict) and isinstance(time_node.get(tipo_tiempo), dict):
+                return time_node[tipo_tiempo].get(tipo_vuelo)
+    except: pass
+    return None
 
 # --- EXTRACCIÓN DE VUELOS ---
 @st.cache_data(ttl=60)
@@ -247,10 +266,11 @@ st.sidebar.markdown("### 🔎 Filtros Avanzados")
 aerolineas_disponibles, aeropuertos_disponibles, numeros_vuelo_disponibles = set(), set(), set()
 
 for v in llegadas + salidas:
-    orig = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('origin'))
-    dest = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('destination'))
+    f_data = v.get('flight') or {}
+    orig = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
+    dest = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
     num = obtener_num_vuelo_seguro(v)
-    al = v.get('flight', {}).get('airline', {}).get('name', "N/A")
+    al = obtener_aerolinea_segura(v)
     
     if al != "N/A": aerolineas_disponibles.add(al)
     if orig != "N/A": aeropuertos_disponibles.add(orig)
@@ -331,7 +351,7 @@ with tab1:
         origen = str(getattr(vuelo, 'origin_airport_iata', 'N/A')).upper()
         callsign = getattr(vuelo, 'callsign', 'N/A')
         aerolinea_nom = getattr(vuelo, 'nombre_aerolinea_mapeado', 'N/A')
-        aerolinea_iata = getattr(vuelo, 'airline_iata', 'N/A') # IATA necesario para la IA
+        aerolinea_iata = getattr(vuelo, 'airline_iata', 'N/A')
         
         horas_restantes = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(vuelo.ground_speed, 1)
         eta = hora_actual + timedelta(hours=horas_restantes)
@@ -367,14 +387,16 @@ with tab1:
 with tab2:
     datos_llegadas = []
     for vuelo in llegadas:
-        timestamp = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival')
+        timestamp = obtener_timestamp_seguro(vuelo, 'arrival', 'scheduled')
         if timestamp:
             hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
             if hora_actual <= hora_vuelo <= limite_tiempo:
                 target = vuelo.get('target_apt')
-                origen = obtener_iata_seguro(vuelo.get('flight', {}).get('airport', {}).get('origin'))
-                aerolinea = vuelo.get('flight', {}).get('airline', {}).get('name', 'N/A')
-                carrier_iata = vuelo.get('flight', {}).get('airline', {}).get('code', {}).get('iata', 'N/A')
+                
+                f_data = vuelo.get('flight') or {}
+                origen = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
+                aerolinea = obtener_aerolinea_segura(vuelo)
+                carrier_iata = obtener_carrier_iata_seguro(vuelo)
                 num_vuelo = obtener_num_vuelo_seguro(vuelo)
                 
                 # --- LLAMADA AL MODELO IA ---
@@ -392,14 +414,16 @@ with tab2:
 with tab3:
     datos_salidas = []
     for vuelo in salidas:
-        timestamp = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('departure')
+        timestamp = obtener_timestamp_seguro(vuelo, 'departure', 'scheduled')
         if timestamp:
             hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
             if hora_actual <= hora_vuelo <= limite_tiempo:
                 target = vuelo.get('target_apt')
-                destino = obtener_iata_seguro(vuelo.get('flight', {}).get('airport', {}).get('destination'))
-                aerolinea = vuelo.get('flight', {}).get('airline', {}).get('name', 'N/A')
-                carrier_iata = vuelo.get('flight', {}).get('airline', {}).get('code', {}).get('iata', 'N/A')
+                
+                f_data = vuelo.get('flight') or {}
+                destino = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
+                aerolinea = obtener_aerolinea_segura(vuelo)
+                carrier_iata = obtener_carrier_iata_seguro(vuelo)
                 num_vuelo = obtener_num_vuelo_seguro(vuelo)
                 
                 # --- LLAMADA AL MODELO IA ---
