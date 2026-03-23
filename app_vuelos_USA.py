@@ -125,6 +125,21 @@ def evaluar_probabilidad_cancelacion(hora_dt, dicc_meteo_apt):
     else:
         return viento_kmh, "ALTA", "red", "🔴 Alta"
 
+@st.cache_data(ttl=300)
+def obtener_metar_taf(iata):
+    # En EE.UU. continental, el ICAO es una 'K' delante del IATA
+    icao = f"K{iata}"
+    try:
+        metar_req = requests.get(f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw", timeout=5)
+        metar_txt = metar_req.text.strip() if metar_req.status_code == 200 and metar_req.text else f"No hay METAR disponible para {icao}."
+        
+        taf_req = requests.get(f"https://aviationweather.gov/api/data/taf?ids={icao}&format=raw", timeout=5)
+        taf_txt = taf_req.text.strip() if taf_req.status_code == 200 and taf_req.text else f"No hay TAF disponible para {icao}."
+        
+        return metar_txt, taf_txt
+    except:
+        return "Error de conexión al servidor de la FAA.", "Error de conexión al servidor de la FAA."
+
 # --- EXTRACCIÓN DE FOTOS CON COPYRIGHT (PLANESPOTTERS) ---
 @st.cache_data(ttl=86400)
 def obtener_foto_aeronave(matricula):
@@ -569,8 +584,21 @@ with tab3:
 
 with tab4:
     if aeropuerto_destino == "TODOS":
-        st.warning("⚠️ Selecciona un aeropuerto específico en la barra lateral para ver su dashboard detallado.")
+        st.warning("⚠️ Selecciona un aeropuerto específico en la barra lateral para ver su dashboard detallado y los reportes METAR/TAF.")
     else:
+        st.markdown(f"### 📋 Reportes Aeronáuticos (METAR / TAF) - {aeropuerto_destino}")
+        metar_text, taf_text = obtener_metar_taf(aeropuerto_destino)
+        
+        c_metar, c_taf = st.columns(2)
+        with c_metar:
+            st.markdown("**METAR (Condiciones Actuales):**")
+            st.code(metar_text, language="text")
+        with c_taf:
+            st.markdown("**TAF (Pronóstico a 24/30h):**")
+            st.code(taf_text, language="text")
+            
+        st.markdown("---")
+        
         col_dash1, col_dash2 = st.columns(2)
         
         with col_dash1:
