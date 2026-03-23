@@ -273,7 +273,7 @@ else:
 st.divider()
 
 # --- PESTAÑAS ---
-tab1, tab2, tab3 = st.tabs(["🗺️ Radar en Vivo", "🛬 Panel de Llegadas", "🛫 Panel de Salidas"])
+tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar en Vivo", "🛬 Panel de Llegadas", "🛫 Panel de Salidas", "📊 Dashboard Analítico"])
 
 with tab1:
     if aeropuerto_destino == "TODOS":
@@ -299,7 +299,6 @@ with tab1:
         callsign = getattr(vuelo, 'callsign', 'N/A')
         aerolinea = getattr(vuelo, 'nombre_aerolinea_mapeado', 'N/A')
         
-        # Telemetría Aeronáutica
         altitud = getattr(vuelo, 'altitude', 'N/A')
         velocidad = getattr(vuelo, 'ground_speed', 'N/A')
         rumbo = getattr(vuelo, 'heading', 'N/A')
@@ -307,7 +306,6 @@ with tab1:
         modelo = getattr(vuelo, 'aircraft_code', 'N/A')
         v_speed = getattr(vuelo, 'vertical_speed', 0)
         
-        # Formato de velocidad vertical
         v_speed_str = f"+{v_speed}" if v_speed > 0 else str(v_speed)
         v_speed_color = "green" if v_speed > 0 else "red" if v_speed < 0 else "gray"
         
@@ -368,7 +366,6 @@ with tab2:
                     aerolinea = obtener_aerolinea(vuelo)
                     num_vuelo = obtener_num_vuelo_seguro(vuelo)
                     
-                    # Extraer modelo y matrícula de los datos programados
                     aircraft_data = vuelo.get('flight', {}).get('aircraft') or {}
                     modelo_avion = (aircraft_data.get('model') or {}).get('code', 'N/A')
                     matricula_avion = aircraft_data.get('registration', 'N/A')
@@ -393,9 +390,8 @@ with tab2:
             pass
             
     if datos_llegadas:
-        df = pd.DataFrame(datos_llegadas)
-        df = df.sort_values(by="Hora (UTC)")
-        st.dataframe(df, use_container_width=True)
+        df_arr = pd.DataFrame(datos_llegadas).sort_values(by="Hora (UTC)")
+        st.dataframe(df_arr, use_container_width=True)
     else:
         st.info("No hay llegadas programadas que coincidan con los filtros en este rango de horas.")
 
@@ -415,7 +411,6 @@ with tab3:
                     aerolinea = obtener_aerolinea(vuelo)
                     num_vuelo = obtener_num_vuelo_seguro(vuelo)
                     
-                    # Extraer modelo y matrícula de los datos programados
                     aircraft_data = vuelo.get('flight', {}).get('aircraft') or {}
                     modelo_avion = (aircraft_data.get('model') or {}).get('code', 'N/A')
                     matricula_avion = aircraft_data.get('registration', 'N/A')
@@ -440,8 +435,71 @@ with tab3:
             pass
             
     if datos_salidas:
-        df = pd.DataFrame(datos_salidas)
-        df = df.sort_values(by="Hora (UTC)")
-        st.dataframe(df, use_container_width=True)
+        df_dep = pd.DataFrame(datos_salidas).sort_values(by="Hora (UTC)")
+        st.dataframe(df_dep, use_container_width=True)
     else:
         st.info("No hay salidas programadas que coincidan con los filtros en este rango de horas.")
+
+with tab4:
+    if aeropuerto_destino == "TODOS":
+        st.warning("⚠️ Selecciona un aeropuerto específico en la barra lateral para ver su dashboard detallado.")
+    else:
+        col_dash1, col_dash2 = st.columns(2)
+        
+        with col_dash1:
+            st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
+            datos_viento = dicc_meteo_global.get(aeropuerto_destino, {})
+            if datos_viento:
+                vientos_futuros = {k: v for k, v in datos_viento.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
+                vientos_limitados = dict(list(vientos_futuros.items())[:24])
+                
+                df_clima = pd.DataFrame(
+                    list(vientos_limitados.values()), 
+                    index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in vientos_limitados.keys()],
+                    columns=["Viento (km/h)"]
+                )
+                st.line_chart(df_clima, color="#3b82f6")
+            else:
+                st.info("Sin datos meteorológicos disponibles.")
+
+        with col_dash2:
+            st.markdown(f"**Distribución de Aerolíneas (Próximas {horas_prediccion}h)**")
+            todas_operaciones = []
+            
+            for v in llegadas + salidas:
+                if v.get('target_apt') == aeropuerto_destino:
+                    tipo = "Llegada" if v in llegadas else "Salida"
+                    timestamp = v.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival' if tipo == "Llegada" else 'departure')
+                    if timestamp:
+                        hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
+                        if hora_actual <= hora_vuelo <= limite_tiempo:
+                            al = obtener_aerolinea(v)
+                            if al != "N/A":
+                                todas_operaciones.append(al)
+            
+            if todas_operaciones:
+                df_aerolineas = pd.DataFrame(todas_operaciones, columns=["Aerolínea"])
+                conteo = df_aerolineas["Aerolínea"].value_counts().head(10)
+                st.bar_chart(conteo, color="#10b981")
+            else:
+                st.info("No hay suficientes datos de aerolíneas en esta franja horaria.")
+        
+        st.markdown("---")
+        st.markdown(f"**Carga Operativa: Vuelos Programados por Hora (Próximas {horas_prediccion}h)**")
+        
+        horas_vuelo = []
+        for v in llegadas + salidas:
+            if v.get('target_apt') == aeropuerto_destino:
+                tipo = "Llegada" if v in llegadas else "Salida"
+                timestamp = v.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival' if tipo == "Llegada" else 'departure')
+                if timestamp:
+                    hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
+                    if hora_actual <= hora_vuelo <= limite_tiempo:
+                        horas_vuelo.append(hora_vuelo.strftime('%H:00'))
+                        
+        if horas_vuelo:
+            df_horas = pd.DataFrame(horas_vuelo, columns=["Hora"])
+            conteo_horas = df_horas["Hora"].value_counts().sort_index()
+            st.bar_chart(conteo_horas, color="#f59e0b")
+        else:
+            st.info("No hay suficientes datos para calcular la carga operativa.")
