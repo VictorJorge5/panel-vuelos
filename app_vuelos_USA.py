@@ -6,7 +6,7 @@ import requests
 import math
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
-import altair as alt  # Añadido para gráficos profesionales ordenados
+import altair as alt
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Control de Operaciones", page_icon="✈️", layout="wide")
@@ -107,6 +107,26 @@ def evaluar_probabilidad_cancelacion(hora_dt, dicc_vientos_apt):
     else:
         return viento_kmh, "ALTA", "red", "🔴 Alta"
 
+# --- EXTRACCIÓN DE FOTOS CON COPYRIGHT (PLANESPOTTERS) ---
+@st.cache_data(ttl=86400) # Guardado en caché por 24h para no saturar la API
+def obtener_foto_aeronave(matricula):
+    if not matricula or matricula == "N/A":
+        return None, None, None
+    try:
+        headers = {'User-Agent': 'FlightWxPro/1.0'}
+        url = f"https://api.planespotters.net/pub/photos/reg/{matricula}"
+        r = requests.get(url, headers=headers, timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            if data.get('photos'):
+                foto_url = data['photos'][0]['thumbnail_large']['src']
+                link = data['photos'][0]['link']
+                fotografo = data['photos'][0]['photographer']
+                return foto_url, link, fotografo
+    except:
+        pass
+    return None, None, None
+
 # --- EXTRACCIÓN SEGURA ---
 @st.cache_data(ttl=86400)
 def obtener_mapa_aerolineas():
@@ -193,7 +213,7 @@ def obtener_datos_vuelos(iatas):
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('Actualizando posiciones y telemetría...'):
+with st.spinner('Actualizando posiciones, telemetría y radares...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
 # --- CREACIÓN DE FILTROS AVANZADOS EN LA BARRA LATERAL ---
@@ -283,7 +303,20 @@ with tab1:
         map_center = AEROPUERTOS[aeropuerto_destino]["coords"]
         zoom = 5
         
-    mapa = folium.Map(location=map_center, zoom_start=zoom)
+    mapa = folium.Map(location=map_center, zoom_start=zoom, tiles="CartoDB dark_matter")
+    
+    # Capa de Radar Meteorológico (NEXRAD - Lluvia en vivo)
+    folium.WmsTileLayer(
+        url='https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi',
+        name='Radar de Tormentas (NEXRAD)',
+        fmt='image/png',
+        layers='nexrad-n0r-9008-m5m',
+        attr='Weather data © IEM Nexrad',
+        transparent=True,
+        overlay=True,
+        control=True,
+        opacity=0.55
+    ).add_to(mapa)
     
     for apt in lista_iatas:
         folium.Marker(
@@ -317,8 +350,33 @@ with tab1:
         viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global[destino])
         
         if prob in filtros_activos:
+            # Petición de la fotografía real
+            foto_url, foto_link, fotografo = obtener_foto_aeronave(matricula)
+            
+            foto_html = ""
+            if foto_url:
+                foto_html = f"""
+                <div style="margin-bottom: 8px;">
+                    <a href="{foto_link}" target="_blank" title="Ver imagen original">
+                        <img src="{foto_url}" width="100%" style="border-radius: 4px; border: 1px solid #ccc; max-height: 140px; object-fit: cover;">
+                    </a>
+                    <div style="font-size: 8px; color: #64748b; text-align: right; margin-top: 2px;">
+                        © {fotografo} | Planespotters.net
+                    </div>
+                </div>
+                """
+            else:
+                foto_html = f"""
+                <div style="margin-bottom: 8px; text-align: center; background: #e2e8f0; padding: 10px; border-radius: 4px; font-size: 11px;">
+                    <a href="https://www.jetphotos.com/registration/{matricula}" target="_blank" style="text-decoration: none; color: #3b82f6;">
+                        📷 Buscar archivo de {matricula} en JetPhotos
+                    </a>
+                </div>
+                """
+
             html_popup = f"""
             <div style='font-family: Arial; font-size: 12px; width: 250px;'>
+                {foto_html}
                 <h4 style='margin-bottom: 2px; color: {color};'>✈️ {callsign} | {aerolinea}</h4>
                 <div style='font-size: 10px; color: gray; margin-bottom: 8px;'>Matrícula: {matricula} | Equipo: {modelo}</div>
                 
@@ -348,7 +406,7 @@ with tab1:
             vuelos_pintados += 1
 
     st_folium(mapa, width=1200, height=600, returned_objects=[])
-    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo.")
+    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo y capa meteorológica.")
 
 with tab2:
     datos_llegadas = []
@@ -446,7 +504,6 @@ with tab4:
     else:
         col_dash1, col_dash2 = st.columns(2)
         
-        # Gráfico 1: Viento
         with col_dash1:
             st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
             datos_viento = dicc_meteo_global.get(aeropuerto_destino, {})
@@ -463,7 +520,6 @@ with tab4:
             else:
                 st.info("Sin datos meteorológicos disponibles.")
 
-        # Gráfico 2: Aerolíneas ordenado de mayor a menor con Altair
         with col_dash2:
             st.markdown(f"**Distribución de Aerolíneas (Próximas {horas_prediccion}h)**")
             todas_operaciones = []
@@ -484,7 +540,6 @@ with tab4:
                 conteo_al = df_aerolineas["Aerolínea"].value_counts().reset_index()
                 conteo_al.columns = ["Aerolínea", "Vuelos"]
                 
-                # Gráfico ordenado estrictamente
                 grafico_al = alt.Chart(conteo_al.head(10)).mark_bar(color="#10b981").encode(
                     x=alt.X("Aerolínea", sort="-y", title=None),
                     y=alt.Y("Vuelos", title="Cantidad de Vuelos"),
@@ -496,14 +551,11 @@ with tab4:
                 st.info("No hay suficientes datos de aerolíneas en esta franja horaria.")
         
         st.markdown("---")
-        # Gráfico 3: Carga operativa continua con horas vacías rellenas
         st.markdown(f"**Carga Operativa: Vuelos Programados por Hora (Próximas {horas_prediccion}h)**")
         
-        # 1. Crear el eje X continuo para que no se salte horas
         horas_continuas = [(hora_actual + timedelta(hours=i)).strftime('%H:00') for i in range(horas_prediccion + 1)]
         conteo_horas_dict = {h: 0 for h in horas_continuas}
         
-        # 2. Rellenar los datos
         for v in llegadas + salidas:
             if v.get('target_apt') == aeropuerto_destino:
                 tipo = "Llegada" if v in llegadas else "Salida"
@@ -515,10 +567,9 @@ with tab4:
                         if hora_str in conteo_horas_dict:
                             conteo_horas_dict[hora_str] += 1
                             
-        # 3. Dibujar con Altair para respetar el orden cronológico
         df_horas = pd.DataFrame(list(conteo_horas_dict.items()), columns=["Hora", "Vuelos"])
         grafico_horas = alt.Chart(df_horas).mark_bar(color="#f59e0b").encode(
-            x=alt.X("Hora", sort=None, title=None), # sort=None respeta el orden cronológico del DataFrame
+            x=alt.X("Hora", sort=None, title=None),
             y=alt.Y("Vuelos", title="Vuelos Programados"),
             tooltip=["Hora", "Vuelos"]
         ).properties(height=300)
