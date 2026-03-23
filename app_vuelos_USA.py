@@ -7,9 +7,23 @@ import math
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 
+--- CONFIGURACIÓN DE LA PÁGINA ---
+
 st.set_page_config(page_title="Aviator's Lens | Operations Control", page_icon="✈️", layout="wide")
 
-st.markdown("""""", unsafe_allow_html=True)
+--- MOTOR DE ESTILOS PROFESIONAL (AVIATOR'S LENS) ---
+
+Esta sección inyecta el diseño "Avionics Dark" directamente en Streamlit
+
+st.markdown("""
+
+
+
+
+
+""", unsafe_allow_html=True)
+
+--- BASE DE DATOS DE AEROPUERTOS ---
 
 AEROPUERTOS = {
     "ATL": {"nombre": "Atlanta Hartsfield-Jackson", "coords": [33.6407, -84.4277]},
@@ -18,11 +32,18 @@ AEROPUERTOS = {
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
 
-with st.sidebar:
-    st.markdown("AVIATOR'S LENS", unsafe_allow_html=True)
-    st.markdown("FLIGHT OPS SYSTEM v1.0", unsafe_allow_html=True)
+--- BARRA LATERAL (SIDEBAR) ---
 
-st.markdown("### ⚙️ CONFIGURATION")
+with st.sidebar:
+    st.markdown("""
+    
+
+AVIATOR'S LENS
+
+Flight Ops System v1.5
+    """, unsafe_allow_html=True)
+
+st.markdown("<h3 style='font-size: 0.9rem; color: #c3c6d6; margin-bottom: 1rem;'>⚙️ CONFIGURATION</h3>", unsafe_allow_html=True)
 aeropuerto_destino = st.selectbox(
     "Base Station",
     ["TODOS", "ATL", "ORD", "LAX", "JFK"],
@@ -31,11 +52,12 @@ aeropuerto_destino = st.selectbox(
 horas_prediccion = st.slider("Forecast Window (Hours)", min_value=1, max_value=24, value=12)
 
 st.divider()
-st.markdown("### 🔍 RISK FILTERS")
+st.markdown("<h3 style='font-size: 0.9rem; color: #c3c6d6; margin-bottom: 1rem;'>🔍 RISK FILTERS</h3>", unsafe_allow_html=True)
 mostrar_baja = st.checkbox("🟢 VFR (Low Risk)", value=True)
 mostrar_moderada = st.checkbox("🟠 MVFR (Moderate)", value=True)
 mostrar_alta = st.checkbox("🔴 IFR (High Risk)", value=True)
 
+st.markdown("<br>", unsafe_allow_html=True)
 if st.button("🔄 REFRESH SYSTEM"):
     st.cache_data.clear()
     st.rerun()
@@ -51,6 +73,8 @@ if aeropuerto_destino == "TODOS":
 else:
     lista_iatas = [aeropuerto_destino]
     nombre_mostrar = f"STATION: {aeropuerto_destino}"
+
+--- FUNCIONES ---
 
 def calcular_distancia_nm(lat1, lon1, lat2, lon2):
     R = 3440.065
@@ -115,18 +139,27 @@ def obtener_datos_vuelos(iatas):
         except: pass
     return vuelos_aire, llegadas, salidas
 
-st.markdown(f"{nombre_mostrar}", unsafe_allow_html=True)
-st.markdown(f"REAL-TIME OPERATIONS FEED • {datetime.now(timezone.utc).strftime('%H:%M')} ZULU", unsafe_allow_html=True)
+--- MAIN INTERFACE RENDER ---
+
+st.markdown(f"""
+
+{nombre_mostrar}
+
+REAL-TIME OPERATIONS FEED • {datetime.now(timezone.utc).strftime('%H:%M')} ZULU
+
+ """, unsafe_allow_html=True)
 
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
-with st.spinner('SYNCHRONIZING WITH RADAR DATA...'):
+with st.spinner('ESTABLISHING RADAR UPLINK...'):
     vuelos_aire, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
 hora_actual = datetime.now(timezone.utc)
 limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
+KPI Section
+
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("INBOUND TRAFFIC", len(vuelos_aire), "RADAR SCAN")
+c1.metric("INBOUND TRAFFIC", len(vuelos_aire), "LIVE RADAR")
 c2.metric("EXPECTED ARRIVALS", len(llegadas), f"{horas_prediccion}H WINDOW")
 c3.metric("SCHEDULED DEPARTURES", len(salidas), "PLANNED")
 if aeropuerto_destino != "TODOS":
@@ -135,17 +168,25 @@ if aeropuerto_destino != "TODOS":
 else:
     c4.metric("ACTIVE BASES", len(lista_iatas), "NETWORK OK")
 
-st.markdown("", unsafe_allow_html=True)
+st.markdown("
+", unsafe_allow_html=True)
 
 tab1, tab2, tab3 = st.tabs(["[ 🗺️ RADAR FEED ]", "[ 🛬 ARRIVALS ]", "[ 🛫 DEPARTURES ]"])
 
 with tab1:
     map_center = [39.5, -98.35] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
-    # Usamos CartoDB dark_matter para que encaje con el diseño oscuro
+    # Mapa con estilo Dark Matter de CartoDB
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 6, tiles="CartoDB dark_matter")
 
 for apt in lista_iatas:
-    folium.CircleMarker(location=AEROPUERTOS[apt]["coords"], radius=6, color="#b2c5ff", fill=True, popup=apt).add_to(mapa)
+    folium.CircleMarker(
+        location=AEROPUERTOS[apt]["coords"], 
+        radius=8, 
+        color="#b2c5ff", 
+        fill=True, 
+        fill_opacity=0.6,
+        popup=f"Base Station: {apt}"
+    ).add_to(mapa)
 
 v_pintados = 0
 for v in vuelos_aire:
@@ -164,7 +205,7 @@ for v in vuelos_aire:
                 ).add_to(mapa)
                 v_pintados += 1
 
-st_folium(mapa, width="100%", height=500, returned_objects=[])
+st_folium(mapa, width="100%", height=550, returned_objects=[])
 
 with tab2:
     res_arr = []
