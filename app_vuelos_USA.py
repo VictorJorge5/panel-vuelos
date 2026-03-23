@@ -285,9 +285,10 @@ for v in vuelos_aire_crudo:
         if callsign != "N/A": numeros_vuelo_disponibles.add(callsign)
         if al_name != "N/A": aerolineas_disponibles.add(al_name)
 
-filtro_aerolineas = st.sidebar.multiselect("✈️ Filtrar por Aerolínea", sorted(list(aerolineas_disponibles)))
-filtro_aeropuertos = st.sidebar.multiselect("📍 Filtrar por Aeropuerto", sorted(list(aeropuertos_disponibles)))
-filtro_vuelos = st.sidebar.multiselect("🔢 Filtrar por Nº Vuelo", sorted(list(numeros_vuelo_disponibles)), placeholder="Buscar...")
+# Convertimos todo a texto (str) antes de ordenar para evitar el TypeError
+filtro_aerolineas = st.sidebar.multiselect("✈️ Filtrar por Aerolínea", sorted([str(x) for x in aerolineas_disponibles]))
+filtro_aeropuertos = st.sidebar.multiselect("📍 Filtrar por Aeropuerto", sorted([str(x) for x in aeropuertos_disponibles]))
+filtro_vuelos = st.sidebar.multiselect("🔢 Filtrar por Nº Vuelo", sorted([str(x) for x in numeros_vuelo_disponibles]), placeholder="Buscar...")
 
 vuelos_aire_filtrados = []
 for v in vuelos_aire_crudo:
