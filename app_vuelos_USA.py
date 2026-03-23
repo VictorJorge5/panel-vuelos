@@ -106,7 +106,7 @@ def evaluar_probabilidad_cancelacion(hora_dt, dicc_vientos_apt):
     else:
         return viento_kmh, "ALTA", "red", "🔴 Alta"
 
-# --- EXTRACCIÓN SEGURA (Evita el AttributeError) ---
+# --- EXTRACCIÓN SEGURA ---
 def obtener_iata_seguro(nodo_aeropuerto):
     try:
         if isinstance(nodo_aeropuerto, dict):
@@ -129,11 +129,20 @@ def obtener_aerolinea(vuelo):
         pass
     return "N/A"
 
+def obtener_num_vuelo_seguro(vuelo_dict):
+    try:
+        ident = (vuelo_dict.get('flight') or {}).get('identification') or {}
+        num = ident.get('number') or {}
+        resultado = num.get('default')
+        return resultado if resultado else "N/A"
+    except Exception:
+        return "N/A"
+
 # --- FUNCIONES DE FLIGHTRADAR ---
 @st.cache_data(ttl=60)
 def obtener_datos_vuelos(iatas):
     fr_api = FlightRadar24API()
-    vuelos_aire, llegadas, salidas = [], [], []
+    vuelos_aire_crudo, llegadas, salidas = [], [], []
     
     try:
         todos_vuelos = fr_api.get_flights()
@@ -143,7 +152,7 @@ def obtener_datos_vuelos(iatas):
                    coords = AEROPUERTOS[apt]["coords"]
                    dist = calcular_distancia_nm(v.latitude, v.longitude, coords[0], coords[1])
                    if dist < 500:
-                      vuelos_aire.append(v)
+                      vuelos_aire_crudo.append(v)
                       break
     except Exception as e:
         print(f"Error descargando vuelos en vivo: {e}")
@@ -162,13 +171,13 @@ def obtener_datos_vuelos(iatas):
         except Exception as e:
             print(f"Error descargando horarios de {apt}: {e}")
             
-    return vuelos_aire, llegadas, salidas
+    return vuelos_aire_crudo, llegadas, salidas
 
 # --- CARGA DE DATOS PRINCIPAL ---
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 
 with st.spinner('Actualizando posiciones y horarios...'):
-    vuelos_aire, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
+    vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
 # --- CREACIÓN DE FILTROS AVANZADOS EN LA BARRA LATERAL ---
 st.sidebar.divider()
@@ -176,6 +185,7 @@ st.sidebar.markdown("### 🔎 Filtros Avanzados")
 
 aerolineas_disponibles = set()
 aeropuertos_disponibles = set()
+numeros_vuelo_disponibles = set()
 
 for v in llegadas + salidas:
     al = obtener_aerolinea(v)
@@ -183,13 +193,39 @@ for v in llegadas + salidas:
     
     orig = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('origin'))
     dest = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('destination'))
+    num = obtener_num_vuelo_seguro(v)
     
     if orig != "N/A": aeropuertos_disponibles.add(orig)
     if dest != "N/A": aeropuertos_disponibles.add(dest)
+    if num != "N/A": numeros_vuelo_disponibles.add(num)
+
+# Añadir números de vuelo de los aviones en el aire al desplegable (solo los que van a nuestras bases)
+for v in vuelos_aire_crudo:
+    destino_temp = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
+    if destino_temp in lista_iatas:
+        callsign = getattr(v, 'callsign', 'N/A')
+        if callsign != "N/A" and callsign.strip() != "":
+            numeros_vuelo_disponibles.add(callsign)
 
 filtro_aerolineas = st.sidebar.multiselect("✈️ Filtrar por Aerolínea", sorted(list(aerolineas_disponibles)))
 filtro_aeropuertos = st.sidebar.multiselect("📍 Filtrar por Aeropuerto", sorted(list(aeropuertos_disponibles)))
+filtro_vuelos = st.sidebar.multiselect("🔢 Filtrar por Nº Vuelo", sorted(list(numeros_vuelo_disponibles)), placeholder="Escribe para buscar...")
 
+# --- FILTRADO ESTRICTO DE VUELOS EN AIRE ---
+vuelos_aire_filtrados = []
+for v in vuelos_aire_crudo:
+    destino = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
+    origen = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
+    callsign = getattr(v, 'callsign', 'N/A')
+    
+    # 1. El destino tiene que ser sí o sí una de las bases activas (ATL, ORD, LAX, JFK)
+    if destino in lista_iatas:
+        # 2. Debe cumplir con los filtros del sidebar si hay alguno seleccionado
+        pasa_filtro_apt = (not filtro_aeropuertos) or (origen in filtro_aeropuertos) or (destino in filtro_aeropuertos)
+        pasa_filtro_vuelo = (not filtro_vuelos) or (callsign in filtro_vuelos)
+        
+        if pasa_filtro_apt and pasa_filtro_vuelo:
+            vuelos_aire_filtrados.append(v)
 
 # --- CUERPO PRINCIPAL ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
@@ -200,9 +236,10 @@ limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
 # --- KPIs SUPERIORES ---
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Vuelos Escaneados", len(vuelos_aire), "En aire hacia destinos")
-col2.metric("Llegadas Prog.", len(llegadas), f"Próximas {horas_prediccion}h")
-col3.metric("Salidas Prog.", len(salidas), f"Próximas {horas_prediccion}h")
+# Ahora el KPI muestra exclusivamente la longitud de la lista ya filtrada hacia nuestros destinos
+col1.metric("Vuelos Escaneados", len(vuelos_aire_filtrados), "En aire hacia bases")
+col2.metric("Llegadas Prog.", len(llegadas), f"Límite API: 100/Aeropuerto")
+col3.metric("Salidas Prog.", len(salidas), f"Límite API: 100/Aeropuerto")
 
 if aeropuerto_destino == "TODOS":
     col4.metric("Bases Monitorizadas", len(lista_iatas), "Red Completa")
@@ -233,69 +270,69 @@ with tab1:
         ).add_to(mapa)
     
     vuelos_pintados = 0
-    for vuelo in vuelos_aire:
-        destino = str(vuelo.destination_airport_iata).upper()
-        origen = str(vuelo.origin_airport_iata).upper()
+    # Iteramos solo sobre la lista que ya pasó todos los filtros de destino y sidebar
+    for vuelo in vuelos_aire_filtrados:
+        destino = str(getattr(vuelo, 'destination_airport_iata', 'N/A')).upper()
+        origen = str(getattr(vuelo, 'origin_airport_iata', 'N/A')).upper()
+        callsign = getattr(vuelo, 'callsign', 'N/A')
         
-        if destino in lista_iatas:
-            # Filtro cruzado para el mapa
-            pasa_filtro_apt = (not filtro_aeropuertos) or (origen in filtro_aeropuertos) or (destino in filtro_aeropuertos)
+        coords_destino = AEROPUERTOS[destino]["coords"]
+        dist = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, coords_destino[0], coords_destino[1])
+        horas_restantes = dist / max(vuelo.ground_speed, 1)
+        eta = hora_actual + timedelta(hours=horas_restantes)
+        
+        viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global[destino])
+        
+        # Último filtro: el riesgo meteorológico seleccionado (verde, naranja, rojo)
+        if prob in filtros_activos:
+            html_popup = f"""
+            <div style='font-family: Arial; font-size: 12px; width: 230px;'>
+                <h4 style='margin-bottom: 5px; color: {color};'>Vuelo: {callsign}</h4>
+                <b>Ruta:</b> {origen} ➔ <b>{destino}</b><br>
+                <b>Altitud:</b> {vuelo.altitude} ft<br>
+                <b>Faltan:</b> {round(horas_restantes, 1)} h<br>
+                <b>ETA (UTC):</b> {eta.strftime('%H:%M')}<br>
+                <hr style='margin: 8px 0;'>
+                <b>Riesgo Cancelación:</b> <span style='color:{color}'><b>{prob}</b></span><br>
+                <b>Viento en Llegada:</b> {viento} km/h
+            </div>
+            """
             
-            if pasa_filtro_apt:
-                coords_destino = AEROPUERTOS[destino]["coords"]
-                dist = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, coords_destino[0], coords_destino[1])
-                horas_restantes = dist / vuelo.ground_speed
-                eta = hora_actual + timedelta(hours=horas_restantes)
-                
-                viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global[destino])
-                
-                if prob in filtros_activos:
-                    html_popup = f"""
-                    <div style='font-family: Arial; font-size: 12px; width: 230px;'>
-                        <h4 style='margin-bottom: 5px; color: {color};'>Vuelo: {vuelo.callsign}</h4>
-                        <b>Ruta:</b> {vuelo.origin_airport_iata} ➔ <b>{destino}</b><br>
-                        <b>Altitud:</b> {vuelo.altitude} ft<br>
-                        <b>Faltan:</b> {round(horas_restantes, 1)} h<br>
-                        <b>ETA (UTC):</b> {eta.strftime('%H:%M')}<br>
-                        <hr style='margin: 8px 0;'>
-                        <b>Riesgo Cancelación:</b> <span style='color:{color}'><b>{prob}</b></span><br>
-                        <b>Viento en Llegada:</b> {viento} km/h
-                    </div>
-                    """
-                    
-                    folium.Marker(
-                        location=[vuelo.latitude, vuelo.longitude],
-                        popup=folium.Popup(html_popup, max_width=300),
-                        icon=folium.Icon(color=color, icon="plane", prefix="fa", angle=vuelo.heading)
-                    ).add_to(mapa)
-                    vuelos_pintados += 1
+            folium.Marker(
+                location=[vuelo.latitude, vuelo.longitude],
+                popup=folium.Popup(html_popup, max_width=300),
+                icon=folium.Icon(color=color, icon="plane", prefix="fa", angle=vuelo.heading)
+            ).add_to(mapa)
+            vuelos_pintados += 1
 
     st_folium(mapa, width=1200, height=600, returned_objects=[])
-    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones que coinciden con tus filtros.")
+    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones hacia tus bases que coinciden con los filtros meteorológicos.")
 
 with tab2:
     datos_llegadas = []
     for vuelo in llegadas:
         try:
-            timestamp = vuelo['flight']['time']['scheduled']['arrival']
+            timestamp = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival')
             if timestamp:
                 hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
                 if hora_actual <= hora_vuelo <= limite_tiempo:
                     
-                    target_apt = vuelo['target_apt']
-                    viento, prob, color, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global[target_apt])
+                    target_apt = vuelo.get('target_apt')
+                    viento, prob, color, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global.get(target_apt, {}))
                     
                     origen = obtener_iata_seguro(vuelo.get('flight', {}).get('airport', {}).get('origin'))
                     aerolinea = obtener_aerolinea(vuelo)
+                    num_vuelo = obtener_num_vuelo_seguro(vuelo)
                     
                     # Verificación de los filtros
                     pasa_filtro_al = (not filtro_aerolineas) or (aerolinea in filtro_aerolineas)
                     pasa_filtro_apt = (not filtro_aeropuertos) or (origen in filtro_aeropuertos or target_apt in filtro_aeropuertos)
+                    pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
                     
-                    if prob in filtros_activos and pasa_filtro_al and pasa_filtro_apt:
+                    if prob in filtros_activos and pasa_filtro_al and pasa_filtro_apt and pasa_filtro_vuelo:
                         datos_llegadas.append({
                             "Hora (UTC)": hora_vuelo.strftime('%H:%M'),
-                            "Vuelo": vuelo['flight']['identification']['number']['default'],
+                            "Vuelo": num_vuelo,
                             "Origen": origen,
                             "Destino": target_apt,
                             "Aerolínea": aerolinea,
@@ -316,25 +353,27 @@ with tab3:
     datos_salidas = []
     for vuelo in salidas:
         try:
-            timestamp = vuelo['flight']['time']['scheduled']['departure']
+            timestamp = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('departure')
             if timestamp:
                 hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
                 if hora_actual <= hora_vuelo <= limite_tiempo:
                     
-                    target_apt = vuelo['target_apt']
-                    viento, prob, color, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global[target_apt])
+                    target_apt = vuelo.get('target_apt')
+                    viento, prob, color, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global.get(target_apt, {}))
                     
                     destino = obtener_iata_seguro(vuelo.get('flight', {}).get('airport', {}).get('destination'))
                     aerolinea = obtener_aerolinea(vuelo)
+                    num_vuelo = obtener_num_vuelo_seguro(vuelo)
                     
                     # Verificación de los filtros
                     pasa_filtro_al = (not filtro_aerolineas) or (aerolinea in filtro_aerolineas)
                     pasa_filtro_apt = (not filtro_aeropuertos) or (destino in filtro_aeropuertos or target_apt in filtro_aeropuertos)
+                    pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
                     
-                    if prob in filtros_activos and pasa_filtro_al and pasa_filtro_apt:
+                    if prob in filtros_activos and pasa_filtro_al and pasa_filtro_apt and pasa_filtro_vuelo:
                         datos_salidas.append({
                             "Hora (UTC)": hora_vuelo.strftime('%H:%M'),
-                            "Vuelo": vuelo['flight']['identification']['number']['default'],
+                            "Vuelo": num_vuelo,
                             "Origen": target_apt,
                             "Destino": destino,
                             "Aerolínea": aerolinea,
