@@ -192,7 +192,7 @@ def obtener_datos_vuelos(iatas):
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('Actualizando posiciones y horarios...'):
+with st.spinner('Actualizando posiciones y telemetría...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
 # --- CREACIÓN DE FILTROS AVANZADOS EN LA BARRA LATERAL ---
@@ -242,15 +242,12 @@ for v in vuelos_aire_crudo:
     airline_icao = getattr(v, 'airline_icao', 'N/A')
     aerolinea_vuelo = mapa_aerolineas.get(airline_icao, "N/A")
     
-    # 1. El destino tiene que ser sí o sí una de las bases activas (ATL, ORD, LAX, JFK)
     if destino in lista_iatas:
-        # 2. Debe cumplir con los filtros del sidebar si hay alguno seleccionado
         pasa_filtro_apt = (not filtro_aeropuertos) or (origen in filtro_aeropuertos) or (destino in filtro_aeropuertos)
         pasa_filtro_vuelo = (not filtro_vuelos) or (callsign in filtro_vuelos)
         pasa_filtro_al = (not filtro_aerolineas) or (aerolinea_vuelo in filtro_aerolineas)
         
         if pasa_filtro_apt and pasa_filtro_vuelo and pasa_filtro_al:
-            # Asociar el nombre de la aerolínea al objeto vuelo para usarlo en el popup luego
             v.nombre_aerolinea_mapeado = aerolinea_vuelo
             vuelos_aire_filtrados.append(v)
 
@@ -296,12 +293,23 @@ with tab1:
         ).add_to(mapa)
     
     vuelos_pintados = 0
-    # Iteramos solo sobre la lista que ya pasó todos los filtros (origen, destino, vuelo Y AEROLÍNEA)
     for vuelo in vuelos_aire_filtrados:
         destino = str(getattr(vuelo, 'destination_airport_iata', 'N/A')).upper()
         origen = str(getattr(vuelo, 'origin_airport_iata', 'N/A')).upper()
         callsign = getattr(vuelo, 'callsign', 'N/A')
         aerolinea = getattr(vuelo, 'nombre_aerolinea_mapeado', 'N/A')
+        
+        # Telemetría Aeronáutica
+        altitud = getattr(vuelo, 'altitude', 'N/A')
+        velocidad = getattr(vuelo, 'ground_speed', 'N/A')
+        rumbo = getattr(vuelo, 'heading', 'N/A')
+        matricula = getattr(vuelo, 'registration', 'N/A')
+        modelo = getattr(vuelo, 'aircraft_code', 'N/A')
+        v_speed = getattr(vuelo, 'vertical_speed', 0)
+        
+        # Formato de velocidad vertical
+        v_speed_str = f"+{v_speed}" if v_speed > 0 else str(v_speed)
+        v_speed_color = "green" if v_speed > 0 else "red" if v_speed < 0 else "gray"
         
         coords_destino = AEROPUERTOS[destino]["coords"]
         dist = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, coords_destino[0], coords_destino[1])
@@ -310,19 +318,27 @@ with tab1:
         
         viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global[destino])
         
-        # Último filtro: el riesgo meteorológico seleccionado (verde, naranja, rojo)
         if prob in filtros_activos:
             html_popup = f"""
-            <div style='font-family: Arial; font-size: 12px; width: 230px;'>
-                <h4 style='margin-bottom: 5px; color: {color};'>Vuelo: {callsign}</h4>
-                <b>Aerolínea:</b> {aerolinea}<br>
+            <div style='font-family: Arial; font-size: 12px; width: 250px;'>
+                <h4 style='margin-bottom: 2px; color: {color};'>✈️ {callsign} | {aerolinea}</h4>
+                <div style='font-size: 10px; color: gray; margin-bottom: 8px;'>Matrícula: {matricula} | Equipo: {modelo}</div>
+                
                 <b>Ruta:</b> {origen} ➔ <b>{destino}</b><br>
-                <b>Altitud:</b> {vuelo.altitude} ft<br>
-                <b>Faltan:</b> {round(horas_restantes, 1)} h<br>
-                <b>ETA (UTC):</b> {eta.strftime('%H:%M')}<br>
-                <hr style='margin: 8px 0;'>
-                <b>Riesgo Cancelación:</b> <span style='color:{color}'><b>{prob}</b></span><br>
-                <b>Viento en Llegada:</b> {viento} km/h
+                <hr style='margin: 4px 0;'>
+                
+                <div style='display: flex; justify-content: space-between;'>
+                    <span><b>Alt:</b> {altitud} ft</span>
+                    <span><b>Vel:</b> {velocidad} kts</span>
+                </div>
+                <div style='display: flex; justify-content: space-between;'>
+                    <span><b>Rumbo:</b> {rumbo}°</span>
+                    <span><b>V/S:</b> <span style='color: {v_speed_color};'>{v_speed_str} fpm</span></span>
+                </div>
+                
+                <hr style='margin: 4px 0;'>
+                <b>Faltan:</b> {round(horas_restantes, 1)} h <b>(ETA:</b> {eta.strftime('%H:%M')}Z)<br>
+                <b>Riesgo:</b> <span style='color:{color}'><b>{prob}</b></span> | <b>Viento:</b> {viento} km/h
             </div>
             """
             
@@ -334,7 +350,7 @@ with tab1:
             vuelos_pintados += 1
 
     st_folium(mapa, width=1200, height=600, returned_objects=[])
-    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones hacia tus bases que coinciden con los filtros.")
+    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo.")
 
 with tab2:
     datos_llegadas = []
@@ -352,6 +368,11 @@ with tab2:
                     aerolinea = obtener_aerolinea(vuelo)
                     num_vuelo = obtener_num_vuelo_seguro(vuelo)
                     
+                    # Extraer modelo y matrícula de los datos programados
+                    aircraft_data = vuelo.get('flight', {}).get('aircraft') or {}
+                    modelo_avion = (aircraft_data.get('model') or {}).get('code', 'N/A')
+                    matricula_avion = aircraft_data.get('registration', 'N/A')
+                    
                     pasa_filtro_al = (not filtro_aerolineas) or (aerolinea in filtro_aerolineas)
                     pasa_filtro_apt = (not filtro_aeropuertos) or (origen in filtro_aeropuertos or target_apt in filtro_aeropuertos)
                     pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
@@ -360,9 +381,11 @@ with tab2:
                         datos_llegadas.append({
                             "Hora (UTC)": hora_vuelo.strftime('%H:%M'),
                             "Vuelo": num_vuelo,
+                            "Aerolínea": aerolinea,
+                            "Aeronave": modelo_avion,
+                            "Matrícula": matricula_avion,
                             "Origen": origen,
                             "Destino": target_apt,
-                            "Aerolínea": aerolinea,
                             "Viento (km/h)": viento,
                             "Alerta": icono
                         })
@@ -392,6 +415,11 @@ with tab3:
                     aerolinea = obtener_aerolinea(vuelo)
                     num_vuelo = obtener_num_vuelo_seguro(vuelo)
                     
+                    # Extraer modelo y matrícula de los datos programados
+                    aircraft_data = vuelo.get('flight', {}).get('aircraft') or {}
+                    modelo_avion = (aircraft_data.get('model') or {}).get('code', 'N/A')
+                    matricula_avion = aircraft_data.get('registration', 'N/A')
+                    
                     pasa_filtro_al = (not filtro_aerolineas) or (aerolinea in filtro_aerolineas)
                     pasa_filtro_apt = (not filtro_aeropuertos) or (destino in filtro_aeropuertos or target_apt in filtro_aeropuertos)
                     pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
@@ -400,9 +428,11 @@ with tab3:
                         datos_salidas.append({
                             "Hora (UTC)": hora_vuelo.strftime('%H:%M'),
                             "Vuelo": num_vuelo,
+                            "Aerolínea": aerolinea,
+                            "Aeronave": modelo_avion,
+                            "Matrícula": matricula_avion,
                             "Origen": target_apt,
                             "Destino": destino,
-                            "Aerolínea": aerolinea,
                             "Viento (km/h)": viento,
                             "Alerta": icono
                         })
