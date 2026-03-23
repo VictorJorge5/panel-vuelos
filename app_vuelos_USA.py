@@ -22,7 +22,7 @@ AEROPUERTOS: Dict[str, Dict[str, Any]] = {
 API_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 RADIO_TIERRA_NM = 3440.065
 
-# --- 2. INYECCIÓN DE ESTILOS AVANZADOS (CSS) ---
+# --- 2. ESTILOS AVANZADOS (CSS PROFESIONAL) ---
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Inter:wght@300;400;600;700&display=swap');
@@ -41,7 +41,7 @@ section[data-testid="stSidebar"] { background-color: #1e293b !important; border-
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. LÓGICA DE NEGOCIO ---
+# --- 3. LÓGICA DE NEGOCIO SEGURA ---
 def calcular_distancia_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dLat, dLon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dLat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon/2)**2
@@ -58,7 +58,7 @@ def obtener_predicciones_globales(iatas: List[str]) -> Dict[str, Dict[str, float
         try:
             datos = requests.get(API_METEO_URL, params=parametros, timeout=10).json()
             dicc_global[apt] = {datos["hourly"]["time"][i]: datos["hourly"]["wind_speed_10m"][i] for i in range(len(datos["hourly"]["time"]))}
-        except requests.RequestException:
+        except Exception:
             dicc_global[apt] = {}
     return dicc_global
 
@@ -74,13 +74,6 @@ def evaluar_probabilidad_cancelacion(hora_dt: datetime, dicc_vientos_apt: Dict[s
     elif 15 <= viento_kmh <= 35: return viento_kmh, "MODERADA", "#f59e0b", "🟠 MVFR"
     else: return viento_kmh, "ALTA", "#ef4444", "🔴 IFR"
 
-def obtener_iata_seguro(nodo_aeropuerto: Optional[Dict]) -> str:
-    if isinstance(nodo_aeropuerto, dict):
-        codigo = (nodo_aeropuerto.get('code') or {}).get('iata')
-        if codigo:
-            return str(codigo)
-    return "N/A"
-
 @st.cache_data(ttl=60)
 def obtener_datos_vuelos(iatas: List[str]) -> Tuple[List[Any], List[Dict], List[Dict]]:
     fr_api = FlightRadar24API()
@@ -94,14 +87,19 @@ def obtener_datos_vuelos(iatas: List[str]) -> Tuple[List[Any], List[Dict], List[
 
     for apt in iatas:
         try:
-            detalles = fr_api.get_airport_details(apt)['airport']['pluginData']['schedule']
-            for v in detalles['arrivals']['data']: v['target_apt'] = apt; llegadas.append(v)
-            for v in detalles['departures']['data']: v['target_apt'] = apt; salidas.append(v)
+            detalles = fr_api.get_airport_details(apt)
+            # Extracción segura de horarios
+            schedule = ((detalles.get('airport') or {}).get('pluginData') or {}).get('schedule') or {}
+            arr = (schedule.get('arrivals') or {}).get('data') or []
+            dep = (schedule.get('departures') or {}).get('data') or []
+            
+            for v in arr: v['target_apt'] = apt; llegadas.append(v)
+            for v in dep: v['target_apt'] = apt; salidas.append(v)
         except Exception: pass
             
     return vuelos_aire, llegadas, salidas
 
-# --- 4. PANEL DE CONTROL Y OBTENCIÓN DE DATOS ---
+# --- 4. PANEL DE CONTROL (SIDEBAR) ---
 st.sidebar.markdown("<h2 style='color:#3b82f6; margin-bottom:0;'>AVIATOR'S LENS</h2>", unsafe_allow_html=True)
 st.sidebar.markdown("<p style='color:#64748b; font-size:0.8rem;'>Sistema de Control Operacional</p>", unsafe_allow_html=True)
 st.sidebar.divider()
@@ -123,7 +121,7 @@ if st.sidebar.button("🔄 INICIALIZAR TELEMETRÍA", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
-# Contexto global/local
+# --- CARGA DE DATOS ---
 lista_iatas = list(AEROPUERTOS.keys()) if aeropuerto_destino == "TODOS" else [aeropuerto_destino]
 nombre_mostrar = "OPERACIONES GLOBALES (US)" if aeropuerto_destino == "TODOS" else f"ESTACIÓN: {AEROPUERTOS[aeropuerto_destino]['nombre']}"
 
@@ -132,27 +130,30 @@ dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 with st.spinner('ESTABLECIENDO ENLACE DE DATOS EN VIVO...'):
     vuelos_aire, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
-# Extracción dinámica y segura para filtros avanzados
+# --- 5. FILTROS AVANZADOS DINÁMICOS ---
 aerolineas_unicas, aeropuertos_unicos = set(), set()
 for v in llegadas + salidas:
     flight_data = v.get('flight') or {}
     
-    al = flight_data.get('airline') or {}
-    if al.get('name'): aerolineas_unicas.add(al['name'])
+    # Aerolínea segura
+    al_data = flight_data.get('airline') or {}
+    nombre_al = al_data.get('name')
+    if nombre_al: aerolineas_unicas.add(nombre_al)
     
-    airport_data = flight_data.get('airport') or {}
-    orig = obtener_iata_seguro(airport_data.get('origin'))
-    if orig != "N/A": aeropuertos_unicos.add(orig)
+    # Aeropuertos seguros
+    apt_data = flight_data.get('airport') or {}
+    orig_iata = ((apt_data.get('origin') or {}).get('code') or {}).get('iata')
+    dest_iata = ((apt_data.get('destination') or {}).get('code') or {}).get('iata')
     
-    dest = obtener_iata_seguro(airport_data.get('destination'))
-    if dest != "N/A": aeropuertos_unicos.add(dest)
+    if orig_iata: aeropuertos_unicos.add(orig_iata)
+    if dest_iata: aeropuertos_unicos.add(dest_iata)
 
 st.sidebar.divider()
 st.sidebar.markdown("### 🔎 FILTROS AVANZADOS")
 aerolineas_sel = st.sidebar.multiselect("✈️ Aerolínea", sorted(list(aerolineas_unicas)))
 aeropuertos_sel = st.sidebar.multiselect("📍 Aeropuerto Secundario", sorted(list(aeropuertos_unicos)))
 
-# --- 5. PROCESAMIENTO EN TIEMPO REAL ---
+# --- 6. PROCESAMIENTO DE TABLAS ---
 hora_actual = datetime.now(timezone.utc)
 limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
@@ -160,65 +161,58 @@ datos_llegadas_raw, datos_salidas_raw = [], []
 
 for vuelo in llegadas:
     flight_data = vuelo.get('flight') or {}
-    time_data = flight_data.get('time') or {}
-    sched_data = time_data.get('scheduled') or {}
-    timestamp = sched_data.get('arrival')
+    timestamp = ((flight_data.get('time') or {}).get('scheduled') or {}).get('arrival')
     
     if timestamp:
         hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
         if hora_actual <= hora_vuelo <= limite_tiempo:
-            viento, prob, _, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global.get(vuelo.get('target_apt'), {}))
+            target_apt = vuelo.get('target_apt', 'N/A')
+            viento, prob, _, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global.get(target_apt, {}))
             
-            airline_data = flight_data.get('airline') or {}
-            aerolinea = airline_data.get('name') or "N/A"
+            aerolinea = (flight_data.get('airline') or {}).get('name') or "N/A"
+            origen = ((flight_data.get('airport') or {}).get('origin') or {}).get('code', {}).get('iata', 'N/A')
             
-            airport_data = flight_data.get('airport') or {}
-            origen = obtener_iata_seguro(airport_data.get('origin'))
-            destino = vuelo.get('target_apt', 'N/A')
-            
-            # Aplicar filtros dinámicos
+            # Aplicar filtros
             if prob in filtros_activos:
-                if (not aerolineas_sel or aerolinea in aerolineas_sel) and (not aeropuertos_sel or origen in aeropuertos_sel or destino in aeropuertos_sel):
+                if (not aerolineas_sel or aerolinea in aerolineas_sel) and (not aeropuertos_sel or origen in aeropuertos_sel or target_apt in aeropuertos_sel):
                     datos_llegadas_raw.append({
                         "Hora (UTC)": hora_vuelo.strftime('%H:%M'), 
                         "Vuelo": (flight_data.get('identification') or {}).get('number', {}).get('default', 'N/A'),
-                        "Origen": origen, "Destino": destino, "Aerolínea": aerolinea, "Viento": viento, "Estado": icono
+                        "Origen": origen, "Destino": target_apt, "Aerolínea": aerolinea, "Viento": viento, "Estado": icono
                     })
 
 for vuelo in salidas:
     flight_data = vuelo.get('flight') or {}
-    time_data = flight_data.get('time') or {}
-    sched_data = time_data.get('scheduled') or {}
-    timestamp = sched_data.get('departure')
+    timestamp = ((flight_data.get('time') or {}).get('scheduled') or {}).get('departure')
     
     if timestamp:
         hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
         if hora_actual <= hora_vuelo <= limite_tiempo:
-            viento, prob, _, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global.get(vuelo.get('target_apt'), {}))
+            target_apt = vuelo.get('target_apt', 'N/A')
+            viento, prob, _, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global.get(target_apt, {}))
             
-            airline_data = flight_data.get('airline') or {}
-            aerolinea = airline_data.get('name') or "N/A"
+            aerolinea = (flight_data.get('airline') or {}).get('name') or "N/A"
+            destino = ((flight_data.get('airport') or {}).get('destination') or {}).get('code', {}).get('iata', 'N/A')
             
-            airport_data = flight_data.get('airport') or {}
-            destino = obtener_iata_seguro(airport_data.get('destination'))
-            origen = vuelo.get('target_apt', 'N/A')
-            
-            # Aplicar filtros dinámicos
+            # Aplicar filtros
             if prob in filtros_activos:
-                if (not aerolineas_sel or aerolinea in aerolineas_sel) and (not aeropuertos_sel or destino in aeropuertos_sel or origen in aeropuertos_sel):
+                if (not aerolineas_sel or aerolinea in aerolineas_sel) and (not aeropuertos_sel or destino in aeropuertos_sel or target_apt in aeropuertos_sel):
                     datos_salidas_raw.append({
                         "Hora (UTC)": hora_vuelo.strftime('%H:%M'), 
                         "Vuelo": (flight_data.get('identification') or {}).get('number', {}).get('default', 'N/A'),
-                        "Origen": origen, "Destino": destino, "Aerolínea": aerolinea, "Viento": viento, "Estado": icono
+                        "Origen": target_apt, "Destino": destino, "Aerolínea": aerolinea, "Viento": viento, "Estado": icono
                     })
 
 df_arr = pd.DataFrame(datos_llegadas_raw).sort_values(by="Hora (UTC)") if datos_llegadas_raw else pd.DataFrame()
 df_dep = pd.DataFrame(datos_salidas_raw).sort_values(by="Hora (UTC)") if datos_salidas_raw else pd.DataFrame()
 
-# Filtrar aviones en mapa por aeropuerto secundario
-vuelos_aire_filtrados = [v for v in vuelos_aire if not aeropuertos_sel or (v.origin_airport_iata in aeropuertos_sel or v.destination_airport_iata in aeropuertos_sel)]
+# Filtrar mapa por aeropuerto secundario (los aviones en aire no siempre tienen el nombre de la aerolínea exacto)
+vuelos_aire_filtrados = [
+    v for v in vuelos_aire 
+    if not aeropuertos_sel or (getattr(v, 'origin_airport_iata', 'N/A') in aeropuertos_sel or getattr(v, 'destination_airport_iata', 'N/A') in aeropuertos_sel)
+]
 
-# --- 6. INTERFAZ PRINCIPAL (MAIN DASHBOARD) ---
+# --- 7. INTERFAZ PRINCIPAL ---
 st.markdown(f"""
 <div class="top-bar">
     <div style="color:#64748b;">Sistema / <b>{nombre_mostrar}</b></div>
@@ -246,7 +240,7 @@ with tab1:
     for apt in lista_iatas: folium.CircleMarker(AEROPUERTOS[apt]["coords"], radius=8, color="#3b82f6", fill=True).add_to(mapa)
     
     for vuelo in vuelos_aire_filtrados:
-        destino = str(vuelo.destination_airport_iata).upper()
+        destino = str(getattr(vuelo, 'destination_airport_iata', 'N/A')).upper()
         if destino in lista_iatas:
             dist = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1])
             eta = hora_actual + timedelta(hours=dist / max(vuelo.ground_speed, 1))
