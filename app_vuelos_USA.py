@@ -35,9 +35,7 @@ AEROPUERTOS = {
 --- BARRA LATERAL (SIDEBAR) ---
 
 with st.sidebar:
-    st.markdown("
-
-AVIATOR'S LENS", unsafe_allow_html=True)
+    st.markdown("AVIATOR'S LENS", unsafe_allow_html=True)
     st.markdown("FLIGHT OPS SYSTEM v1.0", unsafe_allow_html=True)
 
 st.markdown("### ⚙️ CONFIGURATION")
