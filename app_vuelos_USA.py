@@ -4,6 +4,7 @@ import folium
 from streamlit_folium import st_folium
 import requests
 import math
+import concurrent.futures
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 import altair as alt
@@ -108,7 +109,7 @@ def evaluar_probabilidad_cancelacion(hora_dt, dicc_vientos_apt):
         return viento_kmh, "ALTA", "red", "🔴 Alta"
 
 # --- EXTRACCIÓN DE FOTOS CON COPYRIGHT (PLANESPOTTERS) ---
-@st.cache_data(ttl=86400) # Guardado en caché por 24h para no saturar la API
+@st.cache_data(ttl=86400)
 def obtener_foto_aeronave(matricula):
     if not matricula or matricula == "N/A":
         return None, None, None
@@ -213,7 +214,7 @@ def obtener_datos_vuelos(iatas):
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('Actualizando posiciones, telemetría y radares...'):
+with st.spinner('Actualizando posiciones y radares...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
 # --- CREACIÓN DE FILTROS AVANZADOS EN LA BARRA LATERAL ---
@@ -270,6 +271,25 @@ for v in vuelos_aire_crudo:
         if pasa_filtro_apt and pasa_filtro_vuelo and pasa_filtro_al:
             v.nombre_aerolinea_mapeado = aerolinea_vuelo
             vuelos_aire_filtrados.append(v)
+
+# --- PRE-CARGA MULTIHILO DE FOTOGRAFÍAS (RESUELVE EL CUELLO DE BOTELLA) ---
+matriculas_mapa = list(set([
+    getattr(v, 'registration', 'N/A') 
+    for v in vuelos_aire_filtrados 
+    if getattr(v, 'registration', 'N/A') != 'N/A'
+]))
+
+dicc_fotos = {}
+if matriculas_mapa:
+    with st.spinner(f"Descargando {len(matriculas_mapa)} imágenes en paralelo..."):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            futuros = {executor.submit(obtener_foto_aeronave, mat): mat for mat in matriculas_mapa}
+            for futuro in concurrent.futures.as_completed(futuros):
+                mat = futuros[futuro]
+                try:
+                    dicc_fotos[mat] = futuro.result()
+                except Exception:
+                    dicc_fotos[mat] = (None, None, None)
 
 # --- CUERPO PRINCIPAL ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
@@ -350,8 +370,8 @@ with tab1:
         viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global[destino])
         
         if prob in filtros_activos:
-            # Petición de la fotografía real
-            foto_url, foto_link, fotografo = obtener_foto_aeronave(matricula)
+            # Ahora la foto es instantánea porque se lee del diccionario precargado
+            foto_url, foto_link, fotografo = dicc_fotos.get(matricula, (None, None, None))
             
             foto_html = ""
             if foto_url:
