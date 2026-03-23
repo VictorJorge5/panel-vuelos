@@ -219,11 +219,6 @@ def obtener_datos_vuelos(iatas):
                for apt in iatas:
                    coords = AEROPUERTOS[apt]["coords"]
                    dist = calcular_distancia_nm(v.latitude, v.longitude, coords[0], coords[1])
-                   if dist < 500:
-                      vuelos_aire_crudo.append(v)
-                      break
-    except Exception as e:
-        pass
 
     for apt in iatas:
         try:
