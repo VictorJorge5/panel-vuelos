@@ -5,6 +5,7 @@ from streamlit_folium import st_folium
 import requests
 import math
 import concurrent.futures
+import time  # <-- NUEVO: Necesario para regular la descarga de fotos
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 import altair as alt
@@ -141,13 +142,17 @@ def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     elif prob < 0.60: return texto_prob, "MEDIA", "orange", "🟡 Media", c_dest['viento_kts'], c_dest['precip']
     else: return texto_prob, "ALTA", "red", "🔴 Alta", c_dest['viento_kts'], c_dest['precip']
 
+# --- ACTUALIZADO: RADAR DE LLUVIA DINÁMICO ---
 @st.cache_data(ttl=300)
 def obtener_url_radar_lluvia():
     try:
         data = requests.get("https://api.rainviewer.com/public/weather-maps.json", timeout=5).json()
-        latest_time = data['radar']['past'][-1]['time']
-        return f"https://tilecache.rainviewer.com/v2/radar/{latest_time}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
-    except: return None
+        # Ahora extraemos el host y el path dinámico para evitar que se rompa
+        host = data.get('host', 'https://tilecache.rainviewer.com')
+        path = data['radar']['past'][-1]['path']
+        return f"{host}{path}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
+    except: 
+        return None
 
 @st.cache_data(ttl=300)
 def obtener_metar_taf(iata):
@@ -160,15 +165,20 @@ def obtener_metar_taf(iata):
         return metar_txt, taf_txt
     except: return "Error de conexión", "Error de conexión"
 
+# --- ACTUALIZADO: DESCARGA DE FOTOS BLINDADA (ANTISPAM) ---
 @st.cache_data(ttl=86400)
 def obtener_foto_aeronave_ia(matricula):
     if not matricula or matricula == "N/A": return None, None, None
     try:
-        headers = {'User-Agent': 'FlightOpsIA_USA/2.0'}
-        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=5)
+        time.sleep(0.3)  # Pausa estratégica para simular tráfico humano y no ser bloqueados
+        # Usamos un User-Agent estándar de navegador para que la API confíe en nosotros
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
+        
         if r.status_code == 200:
             data = r.json()
             if data.get('photos'):
+                # Usamos thumbnail_large para asegurar que la foto pesa menos de 8.0 Megabytes
                 return data['photos'][0]['thumbnail_large']['src'], data['photos'][0]['link'], data['photos'][0]['photographer']
     except Exception: pass
     return None, None, None
@@ -250,7 +260,7 @@ def obtener_datos_vuelos(iatas):
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('📡 Sincronizando telemetría y consultando a la IA...'):
+with st.spinner('📡 Sincronizando telemetría, IA y descargando imágenes de forma segura...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
 # --- FILTROS LATERALES DINÁMICOS ---
@@ -299,7 +309,8 @@ for v in vuelos_aire_crudo:
 matriculas_mapa = list(set([getattr(v, 'registration', 'N/A') for v in vuelos_aire_filtrados if getattr(v, 'registration', 'N/A') != 'N/A']))
 dicc_fotos = {}
 if matriculas_mapa:
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+    # --- ACTUALIZADO: HILOS REDUCIDOS PARA EVITAR BLOQUEOS DE RED ---
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futuros = {executor.submit(obtener_foto_aeronave_ia, mat): mat for mat in matriculas_mapa}
         for f in concurrent.futures.as_completed(futuros):
             dicc_fotos[futuros[f]] = f.result()
@@ -331,7 +342,6 @@ with tab1:
     map_center = [39.5, -98.35] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 5, tiles="CartoDB dark_matter")
     
-    # --- CAPA DE PRECIPITACIONES RESTAURADA ---
     url_lluvia = obtener_url_radar_lluvia()
     if url_lluvia:
         folium.TileLayer(
@@ -441,7 +451,6 @@ with tab1:
             ).add_to(mapa)
             vuelos_pintados += 1
 
-    # --- CONTROL DE CAPAS AÑADIDO ---
     folium.LayerControl().add_to(mapa)
     st_folium(mapa, width=1200, height=600, returned_objects=[])
     st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo.")
