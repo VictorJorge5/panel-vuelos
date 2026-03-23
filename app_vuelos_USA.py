@@ -7,21 +7,9 @@ import math
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 
---- CONFIGURACIÓN DE LA PÁGINA ---
-
 st.set_page_config(page_title="Aviator's Lens | Operations Control", page_icon="✈️", layout="wide")
 
---- MOTOR DE ESTILOS PROFESIONAL (AVIATOR'S LENS) ---
-
-Esta sección inyecta el diseño "Avionics Dark" directamente en Streamlit
-
-st.markdown("""
-
-
-
-
-
-""", unsafe_allow_html=True)
+st.markdown("""""", unsafe_allow_html=True)
 
 --- BASE DE DATOS DE AEROPUERTOS ---
 
@@ -32,16 +20,8 @@ AEROPUERTOS = {
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
 
---- BARRA LATERAL (SIDEBAR) ---
-
 with st.sidebar:
-    st.markdown("""
-    
-
-AVIATOR'S LENS
-
-Flight Ops System v1.5
-    """, unsafe_allow_html=True)
+    st.markdown("""AVIATOR'S LENS Flight Ops System v1.5""", unsafe_allow_html=True)
 
 st.markdown("<h3 style='font-size: 0.9rem; color: #c3c6d6; margin-bottom: 1rem;'>⚙️ CONFIGURATION</h3>", unsafe_allow_html=True)
 aeropuerto_destino = st.selectbox(
@@ -73,8 +53,6 @@ if aeropuerto_destino == "TODOS":
 else:
     lista_iatas = [aeropuerto_destino]
     nombre_mostrar = f"STATION: {aeropuerto_destino}"
-
---- FUNCIONES ---
 
 def calcular_distancia_nm(lat1, lon1, lat2, lon2):
     R = 3440.065
@@ -139,8 +117,6 @@ def obtener_datos_vuelos(iatas):
         except: pass
     return vuelos_aire, llegadas, salidas
 
---- MAIN INTERFACE RENDER ---
-
 st.markdown(f"""
 
 {nombre_mostrar}
@@ -155,8 +131,6 @@ with st.spinner('ESTABLISHING RADAR UPLINK...'):
 
 hora_actual = datetime.now(timezone.utc)
 limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
-
-KPI Section
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("INBOUND TRAFFIC", len(vuelos_aire), "LIVE RADAR")
