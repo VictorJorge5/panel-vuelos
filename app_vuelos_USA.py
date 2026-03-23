@@ -127,7 +127,6 @@ def evaluar_probabilidad_cancelacion(hora_dt, dicc_meteo_apt):
 
 @st.cache_data(ttl=300)
 def obtener_metar_taf(iata):
-    # En EE.UU. continental, el ICAO es una 'K' delante del IATA
     icao = f"K{iata}"
     try:
         metar_req = requests.get(f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw", timeout=5)
@@ -586,19 +585,6 @@ with tab4:
     if aeropuerto_destino == "TODOS":
         st.warning("⚠️ Selecciona un aeropuerto específico en la barra lateral para ver su dashboard detallado y los reportes METAR/TAF.")
     else:
-        st.markdown(f"### 📋 Reportes Aeronáuticos (METAR / TAF) - {aeropuerto_destino}")
-        metar_text, taf_text = obtener_metar_taf(aeropuerto_destino)
-        
-        c_metar, c_taf = st.columns(2)
-        with c_metar:
-            st.markdown("**METAR (Condiciones Actuales):**")
-            st.code(metar_text, language="text")
-        with c_taf:
-            st.markdown("**TAF (Pronóstico a 24/30h):**")
-            st.code(taf_text, language="text")
-            
-        st.markdown("---")
-        
         col_dash1, col_dash2 = st.columns(2)
         
         with col_dash1:
@@ -687,3 +673,16 @@ with tab4:
         ).properties(height=300)
         
         st.altair_chart(grafico_horas, use_container_width=True)
+        
+        # --- BLOQUE MOVIDO AL FINAL ---
+        st.markdown("---")
+        st.markdown(f"### 📋 Reportes Aeronáuticos (METAR / TAF) - {aeropuerto_destino}")
+        metar_text, taf_text = obtener_metar_taf(aeropuerto_destino)
+        
+        c_metar, c_taf = st.columns(2)
+        with c_metar:
+            st.markdown("**METAR (Condiciones Actuales):**")
+            st.code(metar_text, language="text")
+        with c_taf:
+            st.markdown("**TAF (Pronóstico a 24/30h):**")
+            st.code(taf_text, language="text")
