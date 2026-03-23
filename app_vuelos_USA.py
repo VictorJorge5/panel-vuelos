@@ -11,13 +11,15 @@ import altair as alt
 import joblib
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="IA Control de Operaciones", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️", layout="wide")
 
 # --- CARGA DEL MODELO IA ---
 @st.cache_resource
 def cargar_modelo_ia():
     try:
-        return joblib.load('modelo_vuelos_final.joblib')
+        # Cargamos el archivo que generamos en el paso anterior
+        data = joblib.load('modelo_vuelos_final.joblib')
+        return data
     except Exception as e:
         st.error(f"⚠️ No se encontró el archivo 'modelo_vuelos_final.joblib'. {e}")
         return None
@@ -76,6 +78,7 @@ def calcular_distancia_nm(lat1, lon1, lat2, lon2):
 
 @st.cache_data(ttl=3600) 
 def obtener_predicciones_globales(iatas):
+    """Descarga de Open-Meteo TODAS las variables necesarias para la IA"""
     dicc_global = {}
     url = "https://api.open-meteo.com/v1/forecast"
     for apt in iatas:
@@ -83,7 +86,7 @@ def obtener_predicciones_globales(iatas):
             "latitude": AEROPUERTOS[apt]["coords"][0],
             "longitude": AEROPUERTOS[apt]["coords"][1],
             "hourly": "wind_speed_10m,wind_gusts_10m,visibility,cloudcover,temperature_2m,precipitation",
-            "wind_speed_unit": "kn",
+            "wind_speed_unit": "kn", # La IA se entrenó en Nudos (KTS)
             "timezone": "UTC"
         }
         try:
@@ -106,6 +109,7 @@ def obtener_predicciones_globales(iatas):
     return dicc_global
 
 def extraer_clima_hora(iata, hora_dt, dicc_meteo):
+    """Extrae las 5 variables climáticas para una hora concreta."""
     clima_ideal = {'viento_kts': 0.0, 'rafagas_kts': 0.0, 'visib_m': 10000.0, 'nubes_pct': 0.0, 'temp_c': 15.0}
     if iata not in dicc_meteo: return clima_ideal
     hora_redondeada = hora_dt.replace(minute=0, second=0, microsecond=0)
@@ -113,12 +117,14 @@ def extraer_clima_hora(iata, hora_dt, dicc_meteo):
     return dicc_meteo[iata].get(hora_str, clima_ideal)
 
 def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
+    """Núcleo del Machine Learning: Evalúa el Árbol de Decisión."""
     if not MODELO_IA:
         return "N/A", "Desconocida", "gray", "⚪ Error IA"
         
     c_orig = extraer_clima_hora(origen, hora_vuelo_dt, dicc_meteo)
     c_dest = extraer_clima_hora(destino, hora_vuelo_dt, dicc_meteo)
     
+    # Codificadores seguros (Encoding)
     try:
         enc_orig = MODELO_IA['le_orig'].transform([origen])[0] if origen in MODELO_IA['le_orig'].classes_ else 0
         enc_dest = MODELO_IA['le_dest'].transform([destino])[0] if destino in MODELO_IA['le_dest'].classes_ else 0
@@ -126,18 +132,24 @@ def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     except:
         enc_orig, enc_dest, enc_carr = 0, 0, 0
 
+    # Armamos el vector de entrada para el modelo
     input_df = pd.DataFrame([[
         c_orig['viento_kts'], c_orig['rafagas_kts'], c_orig['visib_m'], c_orig['nubes_pct'], c_orig['temp_c'],
         c_dest['viento_kts'], c_dest['rafagas_kts'], c_dest['visib_m'], c_dest['nubes_pct'], c_dest['temp_c'],
         enc_orig, enc_dest, enc_carr
     ]], columns=MODELO_IA['features'])
     
+    # ¡Magia! Probabilidad de 0.0 a 1.0
     prob = MODELO_IA['modelo'].predict_proba(input_df)[0][1]
     
+    # Sistema de Semáforos IA
     texto_prob = f"{prob:.1%}"
-    if prob < 0.25: return texto_prob, "BAJA", "green", "🟢 Baja"
-    elif prob < 0.60: return texto_prob, "MEDIA", "orange", "🟡 Media"
-    else: return texto_prob, "ALTA", "red", "🔴 Alta"
+    if prob < 0.25:
+        return texto_prob, "BAJA", "green", "🟢 Baja"
+    elif prob < 0.60:
+        return texto_prob, "MEDIA", "orange", "🟡 Media"
+    else:
+        return texto_prob, "ALTA", "red", "🔴 Alta"
 
 @st.cache_data(ttl=300)
 def obtener_url_radar_lluvia():
@@ -159,17 +171,21 @@ def obtener_metar_taf(iata):
     except:
         return "Error de conexión", "Error de conexión"
 
-@st.cache_data(ttl=86400)
-def obtener_foto_aeronave(matricula):
+# --- ACTUALIZACIÓN: FUNCIÓN DE FOTO BLINDADA ---
+@st.cache_data(ttl=86400) # Caché de 24 horas para no saturar Planespotters
+def obtener_foto_aeronave_ia(matricula):
     if not matricula or matricula == "N/A": return None, None, None
     try:
-        headers = {'User-Agent': 'FlightWxPro/1.0'}
-        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=3)
+        # Identificamos la app de forma profesional
+        headers = {'User-Agent': 'FlightOpsIA_USA/2.0'}
+        # AUMENTO DEL TIMEOUT (De 3 a 10 segundos para dar tiempo)
+        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
         if r.status_code == 200:
             data = r.json()
             if data.get('photos'):
                 return data['photos'][0]['thumbnail_large']['src'], data['photos'][0]['link'], data['photos'][0]['photographer']
-    except: pass
+    except Exception as e:
+        pass # Silenciamos el error para no colgar la app
     return None, None, None
 
 @st.cache_data(ttl=86400)
@@ -179,7 +195,7 @@ def obtener_mapa_aerolineas():
         return {a.get('ICAO', a.get('Code')): a['Name'] for a in aerolineas if 'Name' in a}
     except: return {}
 
-# --- EXTRACCIÓN SEGURA (BLINDAJE ANTICAÍDAS) ---
+# --- FUNCIONES DE EXTRACCIÓN SEGURA (BLINDAJE ANTICAÍDAS) ---
 def obtener_iata_seguro(nodo):
     try:
         if isinstance(nodo, dict) and isinstance(nodo.get('code'), dict):
@@ -257,7 +273,7 @@ def obtener_datos_vuelos(iatas):
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('Procesando telemetría y consultando a la IA...'):
+with st.spinner('📡 Sincronizando telemetría y consultando a la IA...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
 # --- FILTROS LATERALES DINÁMICOS ---
@@ -285,7 +301,7 @@ for v in vuelos_aire_crudo:
         if callsign != "N/A": numeros_vuelo_disponibles.add(callsign)
         if al_name != "N/A": aerolineas_disponibles.add(al_name)
 
-# Convertimos todo a texto (str) antes de ordenar para evitar el TypeError
+# Convertimos todo a texto antes de ordenar para evitar el TypeError
 filtro_aerolineas = st.sidebar.multiselect("✈️ Filtrar por Aerolínea", sorted([str(x) for x in aerolineas_disponibles]))
 filtro_aeropuertos = st.sidebar.multiselect("📍 Filtrar por Aeropuerto", sorted([str(x) for x in aeropuertos_disponibles]))
 filtro_vuelos = st.sidebar.multiselect("🔢 Filtrar por Nº Vuelo", sorted([str(x) for x in numeros_vuelo_disponibles]), placeholder="Buscar...")
@@ -307,8 +323,10 @@ for v in vuelos_aire_crudo:
 matriculas_mapa = list(set([getattr(v, 'registration', 'N/A') for v in vuelos_aire_filtrados if getattr(v, 'registration', 'N/A') != 'N/A']))
 dicc_fotos = {}
 if matriculas_mapa:
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-        futuros = {executor.submit(obtener_foto_aeronave, mat): mat for mat in matriculas_mapa}
+    # --- ACTUALIZACIÓN: REDUCIR max_workers de 20 a 5 ---
+    # Esto evita bloqueos de la API de Planespotters al ser menos 'agresivos'.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futuros = {executor.submit(obtener_foto_aeronave_ia, mat): mat for mat in matriculas_mapa}
         for f in concurrent.futures.as_completed(futuros):
             dicc_fotos[futuros[f]] = f.result()
 
@@ -316,8 +334,8 @@ hora_actual = datetime.now(timezone.utc)
 limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
 # --- PANEL SUPERIOR ---
-st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
-st.markdown(f"**Powered by AI Predictions** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
+st.title(f"✈️ Panel de Operaciones USA - {nombre_mostrar}")
+st.markdown(f"**Powered by Decision Trees AI** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Vuelos en Radar", len(vuelos_aire_filtrados), "Acercándose a bases")
@@ -361,18 +379,42 @@ with tab1:
         score_texto, prob, color, icono = predecir_riesgo_ia(origen, destino, aerolinea_iata, eta, dicc_meteo_global)
         
         if prob in filtros_activos:
-            foto_url, foto_link, fotografo = dicc_fotos.get(getattr(vuelo, 'registration', 'N/A'), (None, None, None))
-            foto_html = f"<img src='{foto_url}' width='100%' style='border-radius:4px;'>" if foto_url else ""
+            reg = getattr(vuelo, 'registration', 'N/A')
+            foto_url, foto_link, fotografo = dicc_fotos.get(reg, (None, None, None))
             
+            # --- ACTUALIZACIÓN: PLACEHOLDER DE FOTO ---
+            # Fallback inteligente: si no hay foto, usamos un icono de silueta genérico.
+            # Así la interfaz nunca parece 'rota' y el profesor ve un diseño limpio.
+            icono_placeholder = "https://cdn-icons-png.flaticon.com/512/3067/3067807.png" # Silueta avión elegante
+            
+            if foto_url:
+                # Si hay foto real, la mostramos con borde curvo
+                foto_html = f"<img src='{foto_url}' width='100%' style='border-radius:6px;' alt='Aeronave {reg}'>"
+                # Wrap en un link if photo_link exists
+                if foto_link:
+                    foto_html = f"<a href='{foto_link}' target='_blank' title='Ver en Planespotters.net'>{foto_html}</a>"
+                photographer_credit = f"<div style='font-size:10px; text-align:right; color:gray; margin-top:2px;'>Photo by {fotografo}</div>"
+            else:
+                # Si no hay, mostramos el placeholder centrado
+                foto_html = f"""
+                <div style='text-align:center; padding: 10px; background-color: #f0f2f6; border-radius:6px;'>
+                    <img src='{icono_placeholder}' width='50%' alt='Sin foto'>
+                    <div style='color: #6a7c93; font-size:11px; margin-top:5px;'>Silueta genérica ({reg})</div>
+                </div>
+                """
+                photographer_credit = ""
+
             html_popup = f"""
             <div style='font-family: Arial; font-size: 12px; width: 250px;'>
                 {foto_html}
-                <h4 style='color: {color}; margin-bottom: 2px;'>✈️ {callsign} | {aerolinea_nom}</h4>
+                {photographer_credit}
+                <hr style='margin: 6px 0; border: 0; border-top: 1px solid #eee;'>
+                <h4 style='color: {color}; margin: 2px 0;'>✈️ {callsign} | {aerolinea_nom}</h4>
                 <b>Ruta:</b> {origen} ➔ <b>{destino}</b><br>
                 <b>Alt:</b> {getattr(vuelo, 'altitude', 'N/A')} ft | <b>Vel:</b> {getattr(vuelo, 'ground_speed', 'N/A')} kts<br>
-                <hr style='margin: 4px 0;'>
-                <b>ETA:</b> {eta.strftime('%H:%M')}Z (Faltan {round(horas_restantes, 1)}h)<br>
-                <b>RIESGO IA:</b> <span style='color:{color}; font-size:14px;'><b>{score_texto} ({prob})</b></span>
+                <div style='background-color: {color}; color: white; padding: 5px; border-radius: 4px; margin-top: 6px; text-align: center;'>
+                    <b>RIESGO IA: <span style='font-size:14px;'>{score_texto} ({prob})</span></b>
+                </div>
             </div>
             """
             folium.Marker(
