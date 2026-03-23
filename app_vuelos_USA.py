@@ -7,11 +7,11 @@ import math
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 
---- CONFIGURACIÓN DE LA PÁGINA ---
+--- CONFIGURACION DE LA PAGINA ---
 
 st.set_page_config(page_title="Aviator's Lens | Operations Control", page_icon="✈️", layout="wide")
 
---- ESTILOS PERSONALIZADOS (AVIATOR'S LENS) ---
+--- ESTILOS PERSONALIZADOS (AVIATORS LENS) ---
 
 Inyectamos Tailwind CSS y estilos para simular la interfaz de cabina diseñada
 
