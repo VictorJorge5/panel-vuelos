@@ -70,17 +70,25 @@ def obtener_predicciones_globales(iatas):
         parametros = {
             "latitude": AEROPUERTOS[apt]["coords"][0],
             "longitude": AEROPUERTOS[apt]["coords"][1],
-            "hourly": "wind_speed_10m",
+            "hourly": "wind_speed_10m,wind_direction_10m,precipitation",
             "wind_speed_unit": "kmh",
+            "precipitation_unit": "mm",
             "timezone": "UTC"
         }
         try:
             datos = requests.get(url, params=parametros).json()
             tiempos = datos["hourly"]["time"]
             vientos = datos["hourly"]["wind_speed_10m"]
-            dicc_global[apt] = {tiempos[i]: vientos[i] for i in range(len(tiempos))}
+            direcciones = datos["hourly"]["wind_direction_10m"]
+            precipitaciones = datos["hourly"]["precipitation"]
+            
+            dicc_global[apt] = {
+                "viento": {tiempos[i]: vientos[i] for i in range(len(tiempos))},
+                "direccion": {tiempos[i]: direcciones[i] for i in range(len(tiempos))},
+                "precipitacion": {tiempos[i]: precipitaciones[i] for i in range(len(tiempos))}
+            }
         except:
-            dicc_global[apt] = {}
+            dicc_global[apt] = {"viento": {}, "direccion": {}, "precipitacion": {}}
     return dicc_global
 
 @st.cache_data(ttl=300)
@@ -92,8 +100,8 @@ def obtener_url_radar_lluvia():
     except:
         return None
 
-def evaluar_probabilidad_cancelacion(hora_dt, dicc_vientos_apt):
-    if not dicc_vientos_apt:
+def evaluar_probabilidad_cancelacion(hora_dt, dicc_meteo_apt):
+    if not dicc_meteo_apt or not dicc_meteo_apt.get("viento"):
         return "?", "Desconocida", "gray", "⚪ Desconocida"
         
     minutos = hora_dt.minute
@@ -103,7 +111,7 @@ def evaluar_probabilidad_cancelacion(hora_dt, dicc_vientos_apt):
         hora_redondeada = hora_dt.replace(minute=0, second=0, microsecond=0)
         
     hora_clave = hora_redondeada.strftime("%Y-%m-%dT%H:00")
-    viento_kmh = dicc_vientos_apt.get(hora_clave)
+    viento_kmh = dicc_meteo_apt["viento"].get(hora_clave)
     
     if viento_kmh is None:
         return "?", "Sin Datos", "gray", "⚪ Sin Datos"
@@ -240,7 +248,7 @@ for v in llegadas + salidas:
     
     orig = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('origin'))
     dest = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('destination'))
-    num = obtener_num_vuelo_seguro(vuelo_dict=v)
+    num = obtener_num_vuelo_seguro(v)
     
     if orig != "N/A": aeropuertos_disponibles.add(orig)
     if dest != "N/A": aeropuertos_disponibles.add(dest)
@@ -316,7 +324,7 @@ col3.metric("Salidas Prog.", len(salidas), f"Límite API: 100/Aeropuerto")
 if aeropuerto_destino == "TODOS":
     col4.metric("Bases Monitorizadas", len(lista_iatas), "Red Completa")
 else:
-    viento_actual, prob_actual, _, _ = evaluar_probabilidad_cancelacion(hora_actual, dicc_meteo_global[aeropuerto_destino])
+    viento_actual, prob_actual, _, _ = evaluar_probabilidad_cancelacion(hora_actual, dicc_meteo_global.get(aeropuerto_destino, {}))
     col4.metric(f"Viento en {aeropuerto_destino}", f"{viento_actual} km/h", prob_actual, delta_color="inverse" if prob_actual == "ALTA" else "normal")
 
 st.divider()
@@ -346,12 +354,34 @@ with tab1:
             opacity=0.55
         ).add_to(mapa)
     
+    hora_redondeada = hora_actual.replace(minute=0, second=0, microsecond=0)
+    hora_clave = hora_redondeada.strftime("%Y-%m-%dT%H:00")
+
     for apt in lista_iatas:
+        # Marcador del edificio del aeropuerto
         folium.Marker(
             location=AEROPUERTOS[apt]["coords"], 
             popup=f"<b>{AEROPUERTOS[apt]['nombre']} ({apt})</b>", 
             icon=folium.Icon(color="black", icon="building", prefix="fa")
         ).add_to(mapa)
+
+        # Indicador vectorial de Viento en el aeropuerto
+        dir_viento = dicc_meteo_global.get(apt, {}).get("direccion", {}).get(hora_clave)
+        vel_viento = dicc_meteo_global.get(apt, {}).get("viento", {}).get(hora_clave)
+        
+        if vel_viento is not None and dir_viento is not None:
+            # Los meteorólogos usan la flecha apuntando a donde va el viento (dirección + 180)
+            rotacion_flecha = (dir_viento + 180) % 360
+            html_vector_viento = f"""
+            <div style='font-family: Arial; font-size: 11px; color: #fff; font-weight: bold; background: rgba(15,23,42,0.8); border: 1px solid #3b82f6; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; white-space: nowrap; transform: translate(15px, -15px);'>
+                <i class='fa fa-arrow-up' style='transform: rotate({rotacion_flecha}deg); margin-right: 4px; color: #3b82f6;'></i>
+                {vel_viento} km/h
+            </div>
+            """
+            folium.Marker(
+                location=AEROPUERTOS[apt]["coords"],
+                icon=folium.DivIcon(html=html_vector_viento)
+            ).add_to(mapa)
     
     vuelos_pintados = 0
     for vuelo in vuelos_aire_filtrados:
@@ -375,7 +405,7 @@ with tab1:
         horas_restantes = dist / max(vuelo.ground_speed, 1)
         eta = hora_actual + timedelta(hours=horas_restantes)
         
-        viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global[destino])
+        viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global.get(destino, {}))
         
         if prob in filtros_activos:
             foto_url, foto_link, fotografo = dicc_fotos.get(matricula, (None, None, None))
@@ -533,7 +563,7 @@ with tab4:
         
         with col_dash1:
             st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
-            datos_viento = dicc_meteo_global.get(aeropuerto_destino, {})
+            datos_viento = dicc_meteo_global.get(aeropuerto_destino, {}).get("viento", {})
             if datos_viento:
                 vientos_futuros = {k: v for k, v in datos_viento.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
                 vientos_limitados = dict(list(vientos_futuros.items())[:24])
@@ -546,6 +576,21 @@ with tab4:
                 st.line_chart(df_clima, color="#3b82f6")
             else:
                 st.info("Sin datos meteorológicos disponibles.")
+                
+            st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
+            datos_precip = dicc_meteo_global.get(aeropuerto_destino, {}).get("precipitacion", {})
+            if datos_precip:
+                precip_futuras = {k: v for k, v in datos_precip.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
+                precip_limitadas = dict(list(precip_futuras.items())[:24])
+                
+                df_precip = pd.DataFrame(
+                    list(precip_limitadas.values()), 
+                    index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in precip_limitadas.keys()],
+                    columns=["Lluvia (mm)"]
+                )
+                st.bar_chart(df_precip, color="#3b82f6")
+            else:
+                st.info("Sin pronóstico de lluvia.")
 
         with col_dash2:
             st.markdown(f"**Distribución de Aerolíneas (Próximas {horas_prediccion}h)**")
