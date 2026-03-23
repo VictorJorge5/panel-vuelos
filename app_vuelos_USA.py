@@ -212,21 +212,19 @@ def obtener_datos_vuelos(iatas):
     fr_api = FlightRadar24API()
     vuelos_aire_crudo, llegadas, salidas = [], [], []
     
-  try:
+    try:
         todos_vuelos = fr_api.get_flights()
         for v in todos_vuelos:
-            # 1. Verificamos que el avión se esté moviendo
             if v.ground_speed > 0:
-                # 2. Extraemos el destino y lo pasamos a mayúsculas por seguridad
-                destino_vuelo = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
-                
-                # 3. Si el destino está en nuestra lista (ATL, ORD, LAX, JFK), lo añadimos
-                if destino_vuelo in iatas:
-                    vuelos_aire_crudo.append(v)
-                    
+               for apt in iatas:
+                   coords = AEROPUERTOS[apt]["coords"]
+                   dist = calcular_distancia_nm(v.latitude, v.longitude, coords[0], coords[1])
+                   if dist < 500:
+                      vuelos_aire_crudo.append(v)
+                      break
     except Exception as e:
         pass
-        
+
     for apt in iatas:
         try:
             detalles_apt = fr_api.get_airport_details(apt)
