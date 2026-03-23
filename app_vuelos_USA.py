@@ -107,6 +107,21 @@ def evaluar_probabilidad_cancelacion(hora_dt, dicc_vientos_apt):
         return viento_kmh, "ALTA", "red", "🔴 Alta"
 
 # --- EXTRACCIÓN SEGURA ---
+@st.cache_data(ttl=86400)
+def obtener_mapa_aerolineas():
+    try:
+        api = FlightRadar24API()
+        aerolineas = api.get_airlines()
+        mapa = {}
+        for a in aerolineas:
+            if 'ICAO' in a and 'Name' in a:
+                mapa[a['ICAO']] = a['Name']
+            if 'Code' in a and 'Name' in a:
+                mapa[a['Code']] = a['Name']
+        return mapa
+    except:
+        return {}
+
 def obtener_iata_seguro(nodo_aeropuerto):
     try:
         if isinstance(nodo_aeropuerto, dict):
@@ -155,7 +170,7 @@ def obtener_datos_vuelos(iatas):
                       vuelos_aire_crudo.append(v)
                       break
     except Exception as e:
-        print(f"Error descargando vuelos en vivo: {e}")
+        pass
 
     for apt in iatas:
         try:
@@ -169,12 +184,13 @@ def obtener_datos_vuelos(iatas):
             llegadas.extend(arr)
             salidas.extend(dep)
         except Exception as e:
-            print(f"Error descargando horarios de {apt}: {e}")
+            pass
             
     return vuelos_aire_crudo, llegadas, salidas
 
 # --- CARGA DE DATOS PRINCIPAL ---
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
+mapa_aerolineas = obtener_mapa_aerolineas()
 
 with st.spinner('Actualizando posiciones y horarios...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
@@ -199,32 +215,43 @@ for v in llegadas + salidas:
     if dest != "N/A": aeropuertos_disponibles.add(dest)
     if num != "N/A": numeros_vuelo_disponibles.add(num)
 
-# Añadir números de vuelo de los aviones en el aire al desplegable (solo los que van a nuestras bases)
+# Añadir números de vuelo y aerolíneas de los aviones en el aire al desplegable
 for v in vuelos_aire_crudo:
     destino_temp = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
     if destino_temp in lista_iatas:
         callsign = getattr(v, 'callsign', 'N/A')
         if callsign != "N/A" and callsign.strip() != "":
             numeros_vuelo_disponibles.add(callsign)
+            
+        airline_icao = getattr(v, 'airline_icao', 'N/A')
+        al_name = mapa_aerolineas.get(airline_icao, "N/A")
+        if al_name != "N/A":
+            aerolineas_disponibles.add(al_name)
 
 filtro_aerolineas = st.sidebar.multiselect("✈️ Filtrar por Aerolínea", sorted(list(aerolineas_disponibles)))
 filtro_aeropuertos = st.sidebar.multiselect("📍 Filtrar por Aeropuerto", sorted(list(aeropuertos_disponibles)))
 filtro_vuelos = st.sidebar.multiselect("🔢 Filtrar por Nº Vuelo", sorted(list(numeros_vuelo_disponibles)), placeholder="Escribe para buscar...")
 
-# --- FILTRADO ESTRICTO DE VUELOS EN AIRE ---
+# --- FILTRADO ESTRICTO DE VUELOS EN AIRE PARA EL MAPA ---
 vuelos_aire_filtrados = []
 for v in vuelos_aire_crudo:
     destino = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
     origen = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
     callsign = getattr(v, 'callsign', 'N/A')
     
+    airline_icao = getattr(v, 'airline_icao', 'N/A')
+    aerolinea_vuelo = mapa_aerolineas.get(airline_icao, "N/A")
+    
     # 1. El destino tiene que ser sí o sí una de las bases activas (ATL, ORD, LAX, JFK)
     if destino in lista_iatas:
         # 2. Debe cumplir con los filtros del sidebar si hay alguno seleccionado
         pasa_filtro_apt = (not filtro_aeropuertos) or (origen in filtro_aeropuertos) or (destino in filtro_aeropuertos)
         pasa_filtro_vuelo = (not filtro_vuelos) or (callsign in filtro_vuelos)
+        pasa_filtro_al = (not filtro_aerolineas) or (aerolinea_vuelo in filtro_aerolineas)
         
-        if pasa_filtro_apt and pasa_filtro_vuelo:
+        if pasa_filtro_apt and pasa_filtro_vuelo and pasa_filtro_al:
+            # Asociar el nombre de la aerolínea al objeto vuelo para usarlo en el popup luego
+            v.nombre_aerolinea_mapeado = aerolinea_vuelo
             vuelos_aire_filtrados.append(v)
 
 # --- CUERPO PRINCIPAL ---
@@ -236,7 +263,6 @@ limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
 # --- KPIs SUPERIORES ---
 col1, col2, col3, col4 = st.columns(4)
-# Ahora el KPI muestra exclusivamente la longitud de la lista ya filtrada hacia nuestros destinos
 col1.metric("Vuelos Escaneados", len(vuelos_aire_filtrados), "En aire hacia bases")
 col2.metric("Llegadas Prog.", len(llegadas), f"Límite API: 100/Aeropuerto")
 col3.metric("Salidas Prog.", len(salidas), f"Límite API: 100/Aeropuerto")
@@ -270,11 +296,12 @@ with tab1:
         ).add_to(mapa)
     
     vuelos_pintados = 0
-    # Iteramos solo sobre la lista que ya pasó todos los filtros de destino y sidebar
+    # Iteramos solo sobre la lista que ya pasó todos los filtros (origen, destino, vuelo Y AEROLÍNEA)
     for vuelo in vuelos_aire_filtrados:
         destino = str(getattr(vuelo, 'destination_airport_iata', 'N/A')).upper()
         origen = str(getattr(vuelo, 'origin_airport_iata', 'N/A')).upper()
         callsign = getattr(vuelo, 'callsign', 'N/A')
+        aerolinea = getattr(vuelo, 'nombre_aerolinea_mapeado', 'N/A')
         
         coords_destino = AEROPUERTOS[destino]["coords"]
         dist = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, coords_destino[0], coords_destino[1])
@@ -288,6 +315,7 @@ with tab1:
             html_popup = f"""
             <div style='font-family: Arial; font-size: 12px; width: 230px;'>
                 <h4 style='margin-bottom: 5px; color: {color};'>Vuelo: {callsign}</h4>
+                <b>Aerolínea:</b> {aerolinea}<br>
                 <b>Ruta:</b> {origen} ➔ <b>{destino}</b><br>
                 <b>Altitud:</b> {vuelo.altitude} ft<br>
                 <b>Faltan:</b> {round(horas_restantes, 1)} h<br>
@@ -306,7 +334,7 @@ with tab1:
             vuelos_pintados += 1
 
     st_folium(mapa, width=1200, height=600, returned_objects=[])
-    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones hacia tus bases que coinciden con los filtros meteorológicos.")
+    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones hacia tus bases que coinciden con los filtros.")
 
 with tab2:
     datos_llegadas = []
@@ -324,7 +352,6 @@ with tab2:
                     aerolinea = obtener_aerolinea(vuelo)
                     num_vuelo = obtener_num_vuelo_seguro(vuelo)
                     
-                    # Verificación de los filtros
                     pasa_filtro_al = (not filtro_aerolineas) or (aerolinea in filtro_aerolineas)
                     pasa_filtro_apt = (not filtro_aeropuertos) or (origen in filtro_aeropuertos or target_apt in filtro_aeropuertos)
                     pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
@@ -365,7 +392,6 @@ with tab3:
                     aerolinea = obtener_aerolinea(vuelo)
                     num_vuelo = obtener_num_vuelo_seguro(vuelo)
                     
-                    # Verificación de los filtros
                     pasa_filtro_al = (not filtro_aerolineas) or (aerolinea in filtro_aerolineas)
                     pasa_filtro_apt = (not filtro_aeropuertos) or (destino in filtro_aeropuertos or target_apt in filtro_aeropuertos)
                     pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
