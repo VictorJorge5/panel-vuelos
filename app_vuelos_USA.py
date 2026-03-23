@@ -6,6 +6,7 @@ import requests
 import math
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
+import altair as alt  # Añadido para gráficos profesionales ordenados
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="Control de Operaciones", page_icon="✈️", layout="wide")
@@ -215,7 +216,6 @@ for v in llegadas + salidas:
     if dest != "N/A": aeropuertos_disponibles.add(dest)
     if num != "N/A": numeros_vuelo_disponibles.add(num)
 
-# Añadir números de vuelo y aerolíneas de los aviones en el aire al desplegable
 for v in vuelos_aire_crudo:
     destino_temp = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
     if destino_temp in lista_iatas:
@@ -446,6 +446,7 @@ with tab4:
     else:
         col_dash1, col_dash2 = st.columns(2)
         
+        # Gráfico 1: Viento
         with col_dash1:
             st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
             datos_viento = dicc_meteo_global.get(aeropuerto_destino, {})
@@ -462,6 +463,7 @@ with tab4:
             else:
                 st.info("Sin datos meteorológicos disponibles.")
 
+        # Gráfico 2: Aerolíneas ordenado de mayor a menor con Altair
         with col_dash2:
             st.markdown(f"**Distribución de Aerolíneas (Próximas {horas_prediccion}h)**")
             todas_operaciones = []
@@ -479,15 +481,29 @@ with tab4:
             
             if todas_operaciones:
                 df_aerolineas = pd.DataFrame(todas_operaciones, columns=["Aerolínea"])
-                conteo = df_aerolineas["Aerolínea"].value_counts().head(10)
-                st.bar_chart(conteo, color="#10b981")
+                conteo_al = df_aerolineas["Aerolínea"].value_counts().reset_index()
+                conteo_al.columns = ["Aerolínea", "Vuelos"]
+                
+                # Gráfico ordenado estrictamente
+                grafico_al = alt.Chart(conteo_al.head(10)).mark_bar(color="#10b981").encode(
+                    x=alt.X("Aerolínea", sort="-y", title=None),
+                    y=alt.Y("Vuelos", title="Cantidad de Vuelos"),
+                    tooltip=["Aerolínea", "Vuelos"]
+                ).properties(height=300)
+                
+                st.altair_chart(grafico_al, use_container_width=True)
             else:
                 st.info("No hay suficientes datos de aerolíneas en esta franja horaria.")
         
         st.markdown("---")
+        # Gráfico 3: Carga operativa continua con horas vacías rellenas
         st.markdown(f"**Carga Operativa: Vuelos Programados por Hora (Próximas {horas_prediccion}h)**")
         
-        horas_vuelo = []
+        # 1. Crear el eje X continuo para que no se salte horas
+        horas_continuas = [(hora_actual + timedelta(hours=i)).strftime('%H:00') for i in range(horas_prediccion + 1)]
+        conteo_horas_dict = {h: 0 for h in horas_continuas}
+        
+        # 2. Rellenar los datos
         for v in llegadas + salidas:
             if v.get('target_apt') == aeropuerto_destino:
                 tipo = "Llegada" if v in llegadas else "Salida"
@@ -495,11 +511,16 @@ with tab4:
                 if timestamp:
                     hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
                     if hora_actual <= hora_vuelo <= limite_tiempo:
-                        horas_vuelo.append(hora_vuelo.strftime('%H:00'))
-                        
-        if horas_vuelo:
-            df_horas = pd.DataFrame(horas_vuelo, columns=["Hora"])
-            conteo_horas = df_horas["Hora"].value_counts().sort_index()
-            st.bar_chart(conteo_horas, color="#f59e0b")
-        else:
-            st.info("No hay suficientes datos para calcular la carga operativa.")
+                        hora_str = hora_vuelo.strftime('%H:00')
+                        if hora_str in conteo_horas_dict:
+                            conteo_horas_dict[hora_str] += 1
+                            
+        # 3. Dibujar con Altair para respetar el orden cronológico
+        df_horas = pd.DataFrame(list(conteo_horas_dict.items()), columns=["Hora", "Vuelos"])
+        grafico_horas = alt.Chart(df_horas).mark_bar(color="#f59e0b").encode(
+            x=alt.X("Hora", sort=None, title=None), # sort=None respeta el orden cronológico del DataFrame
+            y=alt.Y("Vuelos", title="Vuelos Programados"),
+            tooltip=["Hora", "Vuelos"]
+        ).properties(height=300)
+        
+        st.altair_chart(grafico_horas, use_container_width=True)
