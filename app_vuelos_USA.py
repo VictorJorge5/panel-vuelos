@@ -83,6 +83,15 @@ def obtener_predicciones_globales(iatas):
             dicc_global[apt] = {}
     return dicc_global
 
+@st.cache_data(ttl=300)
+def obtener_url_radar_lluvia():
+    try:
+        data = requests.get("https://api.rainviewer.com/public/weather-maps.json", timeout=5).json()
+        latest_time = data['radar']['past'][-1]['time']
+        return f"https://tilecache.rainviewer.com/v2/radar/{latest_time}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
+    except:
+        return None
+
 def evaluar_probabilidad_cancelacion(hora_dt, dicc_vientos_apt):
     if not dicc_vientos_apt:
         return "?", "Desconocida", "gray", "⚪ Desconocida"
@@ -231,7 +240,7 @@ for v in llegadas + salidas:
     
     orig = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('origin'))
     dest = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('destination'))
-    num = obtener_num_vuelo_seguro(v)
+    num = obtener_num_vuelo_seguro(vuelo_dict=v)
     
     if orig != "N/A": aeropuertos_disponibles.add(orig)
     if dest != "N/A": aeropuertos_disponibles.add(dest)
@@ -272,7 +281,7 @@ for v in vuelos_aire_crudo:
             v.nombre_aerolinea_mapeado = aerolinea_vuelo
             vuelos_aire_filtrados.append(v)
 
-# --- PRE-CARGA MULTIHILO DE FOTOGRAFÍAS (RESUELVE EL CUELLO DE BOTELLA) ---
+# --- PRE-CARGA MULTIHILO DE FOTOGRAFÍAS ---
 matriculas_mapa = list(set([
     getattr(v, 'registration', 'N/A') 
     for v in vuelos_aire_filtrados 
@@ -325,18 +334,17 @@ with tab1:
         
     mapa = folium.Map(location=map_center, zoom_start=zoom, tiles="CartoDB dark_matter")
     
-    # Capa de Radar Meteorológico (NEXRAD - Lluvia en vivo)
-    folium.WmsTileLayer(
-        url='https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi',
-        name='Radar de Tormentas (NEXRAD)',
-        fmt='image/png',
-        layers='nexrad-n0r-9008-m5m',
-        attr='Weather data © IEM Nexrad',
-        transparent=True,
-        overlay=True,
-        control=True,
-        opacity=0.55
-    ).add_to(mapa)
+    # Capa de Radar Meteorológico (RainViewer - Lluvia en vivo)
+    url_lluvia = obtener_url_radar_lluvia()
+    if url_lluvia:
+        folium.TileLayer(
+            tiles=url_lluvia,
+            attr='Weather data © RainViewer',
+            name='Radar de Precipitaciones',
+            overlay=True,
+            control=True,
+            opacity=0.55
+        ).add_to(mapa)
     
     for apt in lista_iatas:
         folium.Marker(
@@ -370,7 +378,6 @@ with tab1:
         viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global[destino])
         
         if prob in filtros_activos:
-            # Ahora la foto es instantánea porque se lee del diccionario precargado
             foto_url, foto_link, fotografo = dicc_fotos.get(matricula, (None, None, None))
             
             foto_html = ""
@@ -426,7 +433,7 @@ with tab1:
             vuelos_pintados += 1
 
     st_folium(mapa, width=1200, height=600, returned_objects=[])
-    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo y capa meteorológica.")
+    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo.")
 
 with tab2:
     datos_llegadas = []
