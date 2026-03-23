@@ -308,12 +308,16 @@ if matriculas_mapa:
                 except Exception:
                     dicc_fotos[mat] = (None, None, None)
 
-# --- CUERPO PRINCIPAL ---
-st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
-st.markdown(f"Monitorización predictiva de vuelos para: {', '.join(lista_iatas)}")
-
+# --- CÁLCULO DE TIEMPOS ---
 hora_actual = datetime.now(timezone.utc)
 limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
+
+# --- CUERPO PRINCIPAL ---
+st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
+st.markdown(f"""
+**Monitorización de vuelos para:** {', '.join(lista_iatas)}  
+⏱️ **Hora del Sistema (UTC):** `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`
+""")
 
 # --- KPIs SUPERIORES ---
 col1, col2, col3, col4 = st.columns(4)
@@ -342,7 +346,7 @@ with tab1:
         
     mapa = folium.Map(location=map_center, zoom_start=zoom, tiles="CartoDB dark_matter")
     
-    # Capa de Radar Meteorológico (RainViewer - Lluvia en vivo)
+    # Capa de Radar Meteorológico
     url_lluvia = obtener_url_radar_lluvia()
     if url_lluvia:
         folium.TileLayer(
@@ -358,19 +362,16 @@ with tab1:
     hora_clave = hora_redondeada.strftime("%Y-%m-%dT%H:00")
 
     for apt in lista_iatas:
-        # Marcador del edificio del aeropuerto
         folium.Marker(
             location=AEROPUERTOS[apt]["coords"], 
             popup=f"<b>{AEROPUERTOS[apt]['nombre']} ({apt})</b>", 
             icon=folium.Icon(color="black", icon="building", prefix="fa")
         ).add_to(mapa)
 
-        # Indicador vectorial de Viento en el aeropuerto
         dir_viento = dicc_meteo_global.get(apt, {}).get("direccion", {}).get(hora_clave)
         vel_viento = dicc_meteo_global.get(apt, {}).get("viento", {}).get(hora_clave)
         
         if vel_viento is not None and dir_viento is not None:
-            # Los meteorólogos usan la flecha apuntando a donde va el viento (dirección + 180)
             rotacion_flecha = (dir_viento + 180) % 360
             html_vector_viento = f"""
             <div style='font-family: Arial; font-size: 11px; color: #fff; font-weight: bold; background: rgba(15,23,42,0.8); border: 1px solid #3b82f6; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; white-space: nowrap; transform: translate(15px, -15px);'>
@@ -405,7 +406,7 @@ with tab1:
         horas_restantes = dist / max(vuelo.ground_speed, 1)
         eta = hora_actual + timedelta(hours=horas_restantes)
         
-        viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global.get(destino, {}))
+        viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global[destino])
         
         if prob in filtros_activos:
             foto_url, foto_link, fotografo = dicc_fotos.get(matricula, (None, None, None))
