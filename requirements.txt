@@ -5,3 +5,6 @@ streamlit-folium
 requests
 FlightRadarAPI
 beautifulsoup4
+scikit-learn
+joblib
+altair
