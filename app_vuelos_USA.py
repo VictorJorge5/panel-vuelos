@@ -125,8 +125,6 @@ with st.spinner('SYNCHRONIZING WITH RADAR DATA...'):
 hora_actual = datetime.now(timezone.utc)
 limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
-KPI Section
-
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("INBOUND TRAFFIC", len(vuelos_aire), "RADAR SCAN")
 c2.metric("EXPECTED ARRIVALS", len(llegadas), f"{horas_prediccion}H WINDOW")
