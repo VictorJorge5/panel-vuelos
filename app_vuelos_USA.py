@@ -7,11 +7,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 
---- CONFIGURACION DE LA PAGINA ---
-
 st.set_page_config(page_title="Aviator's Lens | Operations Control", page_icon="✈️", layout="wide")
-
---- ESTILOS PERSONALIZADOS (AVIATORS LENS) ---
 
 Inyectamos Tailwind CSS y estilos para simular la interfaz de cabina diseñada
 
@@ -23,16 +19,12 @@ st.markdown("""
 
 """, unsafe_allow_html=True)
 
---- BASE DE DATOS DE AEROPUERTOS ---
-
 AEROPUERTOS = {
     "ATL": {"nombre": "Atlanta Hartsfield-Jackson", "coords": [33.6407, -84.4277]},
     "ORD": {"nombre": "Chicago O'Hare", "coords": [41.9742, -87.9073]},
     "LAX": {"nombre": "Los Angeles International", "coords": [33.9416, -118.4085]},
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
-
---- BARRA LATERAL (SIDEBAR) ---
 
 with st.sidebar:
     st.markdown("AVIATOR'S LENS", unsafe_allow_html=True)
@@ -67,8 +59,6 @@ if aeropuerto_destino == "TODOS":
 else:
     lista_iatas = [aeropuerto_destino]
     nombre_mostrar = f"STATION: {aeropuerto_destino}"
-
---- FUNCIONES ---
 
 def calcular_distancia_nm(lat1, lon1, lat2, lon2):
     R = 3440.065
@@ -133,11 +123,7 @@ def obtener_datos_vuelos(iatas):
         except: pass
     return vuelos_aire, llegadas, salidas
 
---- MAIN INTERFACE ---
-
-st.markdown(f"
-
-{nombre_mostrar}", unsafe_allow_html=True)
+st.markdown(f"{nombre_mostrar}", unsafe_allow_html=True)
 st.markdown(f"REAL-TIME OPERATIONS FEED • {datetime.now(timezone.utc).strftime('%H:%M')} ZULU", unsafe_allow_html=True)
 
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
