@@ -10,12 +10,11 @@ from FlightRadar24 import FlightRadar24API
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="FLIGHTWX PRO | Ops Center", page_icon="✈️", layout="wide")
 
-# --- CSS AVANZADO PARA REPLICAR EL DISEÑO EXACTO ---
+# --- CSS AVANZADO (DISEÑO PROFESIONAL) ---
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Inter:wght@300;400;600;700&display=swap');
 
-/* Reset y Fondo */
 .stApp {
     background-color: #0f172a;
     color: #f1f5f9;
@@ -26,49 +25,17 @@ header {
     visibility: hidden;
 }
 
-.main .block-container {
-    padding-top: 2rem;
-}
-
-/* Sidebar Profesional */
 section[data-testid="stSidebar"] {
     background-color: #1e293b !important;
     border-right: 1px solid #334155;
-    width: 260px !important;
+    width: 300px !important;
 }
 
-.nav-item {
-    padding: 10px 15px;
-    border-radius: 8px;
-    margin-bottom: 5px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    color: #94a3b8;
-}
-
-.nav-item.active {
-    background-color: #3b82f6;
-    color: white;
-    font-weight: 600;
-}
-
-/* Top Bar / Breadcrumbs */
 .top-bar {
     display: flex;
     justify-content: space-between;
     align-items: center;
     margin-bottom: 2rem;
-}
-
-.breadcrumbs {
-    color: #64748b;
-    font-size: 0.9rem;
-}
-
-.breadcrumbs span {
-    color: #f1f5f9;
 }
 
 .zulu-clock {
@@ -82,13 +49,12 @@ section[data-testid="stSidebar"] {
     background: #1e293b;
     padding: 5px 12px;
     border-radius: 6px;
-    border: 1px solid #334155;
+    border: 1px solid #3b82f6;
     font-size: 1.2rem;
     color: #3b82f6;
     box-shadow: 0 0 15px rgba(59, 130, 246, 0.2);
 }
 
-/* Tarjetas de Métricas Estilo Glass */
 .metric-container {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -101,103 +67,40 @@ section[data-testid="stSidebar"] {
     border: 1px solid rgba(255, 255, 255, 0.05);
     padding: 20px;
     border-radius: 16px;
-    position: relative;
-    overflow: hidden;
 }
 
 .metric-label {
     color: #94a3b8;
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
 }
 
 .metric-value {
-    font-size: 2.2rem;
+    font-size: 2rem;
     font-weight: 700;
-    margin-top: 10px;
+    margin-top: 5px;
     font-family: 'JetBrains Mono', monospace;
+    color: #3b82f6;
 }
 
-.metric-delta {
-    font-size: 0.85rem;
-    margin-left: 8px;
-}
-
-.delta-up {
-    color: #10b981;
-}
-
-.delta-down {
-    color: #ef4444;
-}
-
-/* Radar/Mapa Container */
 .radar-frame {
     border: 1px solid #334155;
     border-radius: 16px;
     overflow: hidden;
     background: #020617;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
 }
 
-/* Tablas de Vuelos */
 .table-header {
     color: #3b82f6;
     font-weight: 700;
     font-size: 1.1rem;
-    margin-bottom: 15px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.status-badge {
-    padding: 2px 10px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-transform: uppercase;
-}
-
-.vfr {
-    background: rgba(16, 185, 129, 0.2);
-    color: #10b981;
-    border: 1px solid #10b981;
-}
-
-.mvfr {
-    background: rgba(59, 130, 246, 0.2);
-    color: #3b82f6;
-    border: 1px solid #3b82f6;
-}
-
-.ifr {
-    background: rgba(239, 68, 68, 0.2);
-    color: #ef4444;
-    border: 1px solid #ef4444;
-}
-
-/* Estilo para los tabs de Streamlit para que coincidan */
-.stTabs [data-baseweb="tab-list"] {
-    background-color: transparent;
-    border-bottom: 1px solid #334155;
-}
-
-.stTabs [data-baseweb="tab"] {
-    height: 45px;
-    color: #94a3b8;
-}
-
-.stTabs [aria-selected="true"] {
-    color: #3b82f6 !important;
-    border-bottom-color: #3b82f6 !important;
+    margin: 20px 0 10px 0;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# --- LÓGICA DE DATOS ---
+# --- DATOS Y LÓGICA DE NEGOCIO ---
 AEROPUERTOS = {
     "ATL": {"nombre": "Atlanta Hartsfield-Jackson", "coords": [33.6407, -84.4277]},
     "ORD": {"nombre": "Chicago O'Hare", "coords": [41.9742, -87.9073]},
@@ -205,110 +108,175 @@ AEROPUERTOS = {
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
 
-# Sidebar
-with st.sidebar:
-    st.markdown("<h2 style='color:#3b82f6; margin-bottom:0;'>FLIGHTWX PRO</h2><p style='font-size:0.8rem; color:#64748b;'>Operational Command</p>", unsafe_allow_html=True)
-    st.markdown("""
-    <div class="nav-item active">📊 Dashboard</div>
-    <div class="nav-item">🌐 Global Map</div>
-    <div class="nav-item">☁️ Weather Reports</div>
-    <div class="nav-item">📋 System Logs</div>
-    """, unsafe_allow_html=True)
-    
-    st.divider()
-    
-    aeropuerto_destino = st.selectbox("STATION SELECTION", ["TODOS", "ATL", "ORD", "LAX", "JFK"])
-    horas_prediccion = st.slider("FORECAST WINDOW", 1, 24, 12)
-    
-    st.markdown("### OPS RISK FILTERS")
-    m_vfr = st.checkbox("🟢 VFR Ops", value=True)
-    m_mvfr = st.checkbox("🔵 MVFR Ops", value=True)
-    m_ifr = st.checkbox("🔴 IFR Ops", value=True)
-
-# Lógica de obtención de datos (simplificada para brevedad, igual a la tuya)
 def calcular_distancia_nm(lat1, lon1, lat2, lon2):
     R = 3440.065
     dLat, dLon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dLat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon/2)**2
     return R * (2 * math.atan2(math.sqrt(a), math.sqrt(1-a)))
 
+@st.cache_data(ttl=3600)
+def obtener_predicciones_globales(iatas):
+    dicc_global = {}
+    for apt in iatas:
+        params = {"latitude": AEROPUERTOS[apt]["coords"][0], "longitude": AEROPUERTOS[apt]["coords"][1], "hourly": "wind_speed_10m", "wind_speed_unit": "kmh", "timezone": "UTC"}
+        try:
+            r = requests.get("https://api.open-meteo.com/v1/forecast", params=params).json()
+            dicc_global[apt] = {r["hourly"]["time"][i]: r["hourly"]["wind_speed_10m"][i] for i in range(len(r["hourly"]["time"]))}
+        except:
+            dicc_global[apt] = {}
+    return dicc_global
+
+def evaluar_riesgo(hora_dt, dicc_vientos_apt):
+    if not dicc_vientos_apt: return 0, "UNKNOWN", "gray", "⚪"
+    clave = (hora_dt.replace(minute=0, second=0, microsecond=0)).strftime("%Y-%m-%dT%H:00")
+    viento = dicc_vientos_apt.get(clave, 0)
+    if viento < 15: return round(viento,1), "BAJA", "#10b981", "🟢"
+    elif 15 <= viento <= 35: return round(viento,1), "MODERADA", "#f59e0b", "🟠"
+    else: return round(viento,1), "ALTA", "#ef4444", "🔴"
+
 @st.cache_data(ttl=60)
-def fetch_data(iatas):
-    api = FlightRadar24API()
+def obtener_datos_vuelos_reales(iatas):
+    fr_api = FlightRadar24API()
     v_aire, arr, dep = [], [], []
     try:
-        flights = api.get_flights()
-        v_aire = [v for v in flights if any(calcular_distancia_nm(v.latitude, v.longitude, AEROPUERTOS[a]["coords"][0], AEROPUERTOS[a]["coords"][1]) < 300 for a in iatas)]
+        todos = fr_api.get_flights()
+        for v in todos:
+            if v.ground_speed > 0:
+                for apt in iatas:
+                    if calcular_distancia_nm(v.latitude, v.longitude, AEROPUERTOS[apt]["coords"][0], AEROPUERTOS[apt]["coords"][1]) < 300:
+                        v_aire.append(v)
+                        break
     except:
         pass
-    return v_aire, [], [] # Simplificado para demo visual rápida
+        
+    for apt in iatas:
+        try:
+            det = fr_api.get_airport_details(apt)['airport']['pluginData']['schedule']
+            for v in det['arrivals']['data']:
+                v['target_apt'] = apt
+                arr.append(v)
+            for v in det['departures']['data']:
+                v['target_apt'] = apt
+                dep.append(v)
+        except:
+            pass
+            
+    return v_aire, arr, dep
 
-# --- HEADER PRINCIPAL ---
+# --- SIDEBAR (CONTROLES) ---
+with st.sidebar:
+    st.markdown("<h2 style='color:#3b82f6; margin-bottom:0;'>AVIATOR'S LENS</h2>", unsafe_allow_html=True)
+    st.divider()
+    
+    apt_sel = st.selectbox("PRIMARY STATION", ["TODOS", "ATL", "ORD", "LAX", "JFK"])
+    h_pred = st.slider("FORECAST WINDOW (H)", 1, 24, 12)
+    
+    st.markdown("### RISK FILTERS")
+    f_baja = st.checkbox("🟢 VFR (Low)", value=True)
+    f_mod = st.checkbox("🟠 MVFR (Moderate)", value=True)
+    f_alt = st.checkbox("🔴 IFR (Critical)", value=True)
+    
+    if st.button("🔄 REFRESH SYSTEM", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+# --- PROCESAMIENTO ---
+filtros = []
+if f_baja: filtros.append("BAJA")
+if f_mod: filtros.append("MODERADA")
+if f_alt: filtros.append("ALTA")
+
+iatas_work = list(AEROPUERTOS.keys()) if apt_sel == "TODOS" else [apt_sel]
+dicc_meteo = obtener_predicciones_globales(iatas_work)
+
+with st.spinner('UPLINKING REAL-TIME DATA...'):
+    v_aire, llegadas, salidas = obtener_datos_vuelos_reales(iatas_work)
+
+# --- UI PRINCIPAL ---
 zulu_now = datetime.now(timezone.utc).strftime("%H:%M")
 st.markdown(f"""
 <div class="top-bar">
-    <div class="breadcrumbs">Home / Global Operations / <span>Flight Weather Analysis</span></div>
-    <div class="zulu-clock">
-        <span style="font-size: 0.8rem; color: #64748b;">Live Zulu Time: {zulu_now}Z</span>
-        <div class="clock-box">{zulu_now}Z</div>
-    </div>
+    <div style="color:#64748b;">System / <b>{apt_sel if apt_sel != 'TODOS' else 'Global Ops'}</b></div>
+    <div class="zulu-clock"><div class="clock-box">{zulu_now} ZULU</div></div>
 </div>
 """, unsafe_allow_html=True)
 
-# --- MÉTRICAS GLASS ---
-v_aire, _, _ = fetch_data(list(AEROPUERTOS.keys()))
+# Métricas Reales
+c1, c2, c3, c4 = st.columns(4)
 
-st.markdown(f"""
-<div class="metric-container">
-    <div class="metric-card">
-        <div class="metric-label">Inbound Flights</div>
-        <div class="metric-value">{len(v_aire)} <span class="metric-delta delta-up">(+5%) ↑</span></div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-label">Expected Arrival</div>
-        <div class="metric-value">35 <span class="metric-delta" style="color:#64748b;">(Avg. Delay 10m)</span></div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-label">Scheduled Departure</div>
-        <div class="metric-value">48 <span class="metric-delta delta-down">(-2%)</span></div>
-    </div>
-    <div class="metric-card">
-        <div class="metric-label">Active Bases</div>
-        <div class="metric-value">12 <span class="metric-delta" style="color:#ef4444;">(3 Critical)</span></div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+with c1: st.markdown(f'<div class="metric-card"><div class="metric-label">Inbound Traffic</div><div class="metric-value">{len(v_aire)}</div></div>', unsafe_allow_html=True)
+with c2: st.markdown(f'<div class="metric-card"><div class="metric-label">Expected Arrivals</div><div class="metric-value">{len(llegadas)}</div></div>', unsafe_allow_html=True)
+with c3: st.markdown(f'<div class="metric-card"><div class="metric-label">Scheduled Departures</div><div class="metric-value">{len(salidas)}</div></div>', unsafe_allow_html=True)
+with c4:
+    val_wind = "N/A"
+    if apt_sel != "TODOS":
+        v, _, _, _ = evaluar_riesgo(datetime.now(timezone.utc), dicc_meteo[apt_sel])
+        val_wind = f"{v} KM/H"
+    st.markdown(f'<div class="metric-card"><div class="metric-label">Station Wind</div><div class="metric-value">{val_wind}</div></div>', unsafe_allow_html=True)
 
-# --- RADAR TÁCTICO ---
+# Mapa Radar Real
 st.markdown('<div class="radar-frame">', unsafe_allow_html=True)
-m = folium.Map(location=[39.5, -98], zoom_start=4, tiles="CartoDB dark_matter", zoom_control=False)
+m = folium.Map(location=[39.5, -98] if apt_sel=="TODOS" else AEROPUERTOS[apt_sel]["coords"], zoom_start=4 if apt_sel=="TODOS" else 6, tiles="CartoDB dark_matter")
 
-# Añadir círculos de aeropuertos con glow azul
-for k, v in AEROPUERTOS.items():
-    folium.CircleMarker(v["coords"], radius=6, color="#3b82f6", fill=True, weight=2, fill_opacity=0.6).add_to(m)
-
-st_folium(m, width="100%", height=450)
+for k in iatas_work:
+    folium.CircleMarker(AEROPUERTOS[k]["coords"], radius=8, color="#3b82f6", fill=True).add_to(m)
+    
+for v in v_aire:
+    dest = str(v.destination_airport_iata).upper()
+    if dest in iatas_work:
+        dist = calcular_distancia_nm(v.latitude, v.longitude, AEROPUERTOS[dest]["coords"][0], AEROPUERTOS[dest]["coords"][1])
+        eta = datetime.now(timezone.utc) + timedelta(hours=dist/max(v.ground_speed,1))
+        _, prob, color, _ = evaluar_riesgo(eta, dicc_meteo.get(dest))
+        
+        if prob in filtros:
+            folium.Marker(
+                [v.latitude, v.longitude], 
+                icon=folium.Icon(color="blue" if color=="#10b981" else "orange" if color=="#f59e0b" else "red", icon="plane", prefix="fa"), 
+                tooltip=f"FLIGHT: {v.callsign} | DEST: {dest}"
+            ).add_to(m)
+            
+st_folium(m, width="100%", height=500, key="radar_map")
 st.markdown('</div>', unsafe_allow_html=True)
 
-st.write("")
+# Tablas Reales Filtradas
+col_in, col_out = st.columns(2)
 
-# --- TABLAS DE OPERACIONES ---
-col_a, col_b = st.columns(2)
+with col_in:
+    st.markdown('<div class="table-header">🛬 LIVE INBOUND FEED</div>', unsafe_allow_html=True)
+    res_in = []
+    for v in llegadas:
+        try:
+            h = datetime.fromtimestamp(v['flight']['time']['scheduled']['arrival'], timezone.utc)
+            if datetime.now(timezone.utc) <= h <= datetime.now(timezone.utc) + timedelta(hours=h_pred):
+                viento, prob, _, icono = evaluar_riesgo(h, dicc_meteo[v['target_apt']])
+                if prob in filtros:
+                    res_in.append({
+                        "TIME (Z)": h.strftime('%H:%M'), 
+                        "FLIGHT": v['flight']['identification']['number']['default'], 
+                        "DEST": v['target_apt'], 
+                        "RISK": f"{icono} {prob}", 
+                        "WIND": viento
+                    })
+        except:
+            pass
+    st.dataframe(pd.DataFrame(res_in), use_container_width=True, hide_index=True) if res_in else st.info("No active inbound matches.")
 
-with col_a:
-    st.markdown('<div class="table-header">🛬 Arrivals</div>', unsafe_allow_html=True)
-    df_arr = pd.DataFrame([
-        {"Flight": "AA100", "Origin": "KORD", "ETA (Z)": "21:10Z", "Status": "VFR", "Weather": "CLR 15/0"},
-        {"Flight": "UA45", "Origin": "KSFO", "ETA (Z)": "21:25Z", "Status": "MVFR", "Weather": "FEW 025"},
-        {"Flight": "DL88", "Origin": "EGLL", "ETA (Z)": "21:50Z", "Status": "IFR", "Weather": "OVC 008"}
-    ])
-    st.dataframe(df_arr, use_container_width=True, hide_index=True)
-
-with col_b:
-    st.markdown('<div class="table-header">🛫 Departures</div>', unsafe_allow_html=True)
-    df_dep = pd.DataFrame([
-        {"Flight": "IB32", "Dest": "LEMD", "ETD (Z)": "21:15Z", "Status": "VFR", "Weather": "SKC 20/12"},
-        {"Flight": "AF11", "Dest": "LFPG", "ETD (Z)": "21:40Z", "Status": "IFR", "Weather": "RA BR 004"},
-        {"Flight": "BA05", "Dest": "EGLL", "ETD (Z)": "22:00Z", "Status": "VFR", "Weather": "CLR 18/5"}
-    ])
-    st.dataframe(df_dep, use_container_width=True, hide_index=True)
+with col_out:
+    st.markdown('<div class="table-header">🛫 SCHEDULED OUTBOUND</div>', unsafe_allow_html=True)
+    res_out = []
+    for v in salidas:
+        try:
+            h = datetime.fromtimestamp(v['flight']['time']['scheduled']['departure'], timezone.utc)
+            if datetime.now(timezone.utc) <= h <= datetime.now(timezone.utc) + timedelta(hours=h_pred):
+                viento, prob, _, icono = evaluar_riesgo(h, dicc_meteo[v['target_apt']])
+                if prob in filtros:
+                    res_out.append({
+                        "TIME (Z)": h.strftime('%H:%M'), 
+                        "FLIGHT": v['flight']['identification']['number']['default'], 
+                        "ORIG": v['target_apt'], 
+                        "RISK": f"{icono} {prob}", 
+                        "WIND": viento
+                    })
+        except:
+            pass
+    st.dataframe(pd.DataFrame(res_out), use_container_width=True, hide_index=True) if res_out else st.info("No active outbound matches.")
