@@ -19,24 +19,24 @@ AEROPUERTOS = {
 }
 
 with st.sidebar:
-    st.markdown("""AVIATOR'S LENS Flight Ops System v1.5""", unsafe_allow_html=True)
+    st.markdown("""AVIATOR'S LENSFlight Ops System v2.0""", unsafe_allow_html=True)
 
-st.markdown("<h3 style='font-size: 0.9rem; color: #c3c6d6; margin-bottom: 1rem;'>⚙️ CONFIGURATION</h3>", unsafe_allow_html=True)
+st.markdown("<h3 style='font-size: 0.85rem; color: #c3c6d6; margin-bottom: 1.25rem; font-weight: 700; opacity: 0.8;'>⚙️ SYSTEM CONFIG</h3>", unsafe_allow_html=True)
 aeropuerto_destino = st.selectbox(
-    "Base Station",
+    "Primary Station ID",
     ["TODOS", "ATL", "ORD", "LAX", "JFK"],
     index=0
 )
 horas_prediccion = st.slider("Forecast Window (Hours)", min_value=1, max_value=24, value=12)
 
 st.divider()
-st.markdown("<h3 style='font-size: 0.9rem; color: #c3c6d6; margin-bottom: 1rem;'>🔍 RISK FILTERS</h3>", unsafe_allow_html=True)
-mostrar_baja = st.checkbox("🟢 VFR (Low Risk)", value=True)
-mostrar_moderada = st.checkbox("🟠 MVFR (Moderate)", value=True)
-mostrar_alta = st.checkbox("🔴 IFR (High Risk)", value=True)
+st.markdown("<h3 style='font-size: 0.85rem; color: #c3c6d6; margin-bottom: 1.25rem; font-weight: 700; opacity: 0.8;'>🔍 RISK ANALYTICS FILTERS</h3>", unsafe_allow_html=True)
+mostrar_baja = st.checkbox("🟢 VFR (Low Risk Ops)", value=True)
+mostrar_moderada = st.checkbox("🟠 MVFR (Moderate Risks)", value=True)
+mostrar_alta = st.checkbox("🔴 IFR (Critical Risk)", value=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
-if st.button("🔄 REFRESH SYSTEM"):
+if st.button("🔄 REFRESH CORE DATA"):
     st.cache_data.clear()
     st.rerun()
 
@@ -47,7 +47,7 @@ if mostrar_alta: filtros_activos.append("ALTA")
 
 if aeropuerto_destino == "TODOS":
     lista_iatas = list(AEROPUERTOS.keys())
-    nombre_mostrar = "GLOBAL OPS CENTER"
+    nombre_mostrar = "GLOBAL OPS COMMAND"
 else:
     lista_iatas = [aeropuerto_destino]
     nombre_mostrar = f"STATION: {aeropuerto_destino}"
@@ -119,19 +119,19 @@ st.markdown(f"""
 
 {nombre_mostrar}
 
-REAL-TIME OPERATIONS FEED • {datetime.now(timezone.utc).strftime('%H:%M')} ZULU
+LIVE RADAR TELEMETRY • {datetime.now(timezone.utc).strftime('%H:%M')} ZULU
 
  """, unsafe_allow_html=True)
 
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
-with st.spinner('ESTABLISHING RADAR UPLINK...'):
+with st.spinner('ESTABLISHING SECURE SATELLITE UPLINK...'):
     vuelos_aire, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
 hora_actual = datetime.now(timezone.utc)
 limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("INBOUND TRAFFIC", len(vuelos_aire), "LIVE RADAR")
+c1.metric("INBOUND TRAFFIC", len(vuelos_aire), "RADAR SCAN")
 c2.metric("EXPECTED ARRIVALS", len(llegadas), f"{horas_prediccion}H WINDOW")
 c3.metric("SCHEDULED DEPARTURES", len(salidas), "PLANNED")
 if aeropuerto_destino != "TODOS":
@@ -142,20 +142,21 @@ else:
 
 st.markdown("", unsafe_allow_html=True)
 
-tab1, tab2, tab3 = st.tabs(["[ 🗺️ RADAR FEED ]", "[ 🛬 ARRIVALS ]", "[ 🛫 DEPARTURES ]"])
+tab1, tab2, tab3 = st.tabs(["[ 🗺️ TACTICAL RADAR ]", "[ 🛬 INBOUND FEED ]", "[ 🛫 OUTBOUND FEED ]"])
 
 with tab1:
     map_center = [39.5, -98.35] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
-    # Mapa con estilo Dark Matter de CartoDB
+    # Mapa con estilo Dark Matter de CartoDB - El estándar para interfaces dark de aviación
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 6, tiles="CartoDB dark_matter")
 
 for apt in lista_iatas:
     folium.CircleMarker(
         location=AEROPUERTOS[apt]["coords"], 
-        radius=8, 
+        radius=10, 
         color="#b2c5ff", 
         fill=True, 
-        fill_opacity=0.6,
+        fill_opacity=0.7,
+        weight=2,
         popup=f"Base Station: {apt}"
     ).add_to(mapa)
 
@@ -172,11 +173,11 @@ for v in vuelos_aire:
                 folium.Marker(
                     location=[v.latitude, v.longitude],
                     icon=folium.Icon(color="blue" if color=="#10b981" else "orange" if color=="#f59e0b" else "red", icon="plane", prefix="fa"),
-                    tooltip=f"{v.callsign} ➔ {dest} | RISK: {prob}"
+                    tooltip=f"FLIGHT: {v.callsign} | DST: {dest} | RISK: {prob}"
                 ).add_to(mapa)
                 v_pintados += 1
 
-st_folium(mapa, width="100%", height=550, returned_objects=[])
+st_folium(mapa, width="100%", height=600, returned_objects=[])
 
 with tab2:
     res_arr = []
@@ -189,17 +190,17 @@ with tab2:
                     viento, prob, _, icono = evaluar_probabilidad_cancelacion(h, dicc_meteo_global[v['target_apt']])
                     if prob in filtros_activos:
                         res_arr.append({
-                            "TIME (Z)": h.strftime('%H:%M'),
-                            "FLIGHT": v['flight']['identification']['number']['default'],
-                            "DEST": v['target_apt'],
-                            "RISK": icono + " " + prob,
-                            "WIND FORECAST": f"{viento} km/h"
+                            "TIME (ZULU)": h.strftime('%H:%M'),
+                            "FLIGHT ID": v['flight']['identification']['number']['default'],
+                            "DEST STATION": v['target_apt'],
+                            "MET RISK": icono + " " + prob,
+                            "WIND (KM/H)": f"{viento}"
                         })
         except: pass
     if res_arr: 
-        df_arr = pd.DataFrame(res_arr).sort_values("TIME (Z)")
+        df_arr = pd.DataFrame(res_arr).sort_values("TIME (ZULU)")
         st.dataframe(df_arr, use_container_width=True, hide_index=True)
-    else: st.info("NO MATCHING ARRIVALS FOUND.")
+    else: st.info("NO MATCHING TACTICAL ARRIVALS DETECTED.")
 
 with tab3:
     res_dep = []
@@ -212,14 +213,14 @@ with tab3:
                     viento, prob, _, icono = evaluar_probabilidad_cancelacion(h, dicc_meteo_global[v['target_apt']])
                     if prob in filtros_activos:
                         res_dep.append({
-                            "TIME (Z)": h.strftime('%H:%M'),
-                            "FLIGHT": v['flight']['identification']['number']['default'],
-                            "ORIGIN": v['target_apt'],
-                            "RISK": icono + " " + prob,
-                            "WIND FORECAST": f"{viento} km/h"
+                            "TIME (ZULU)": h.strftime('%H:%M'),
+                            "FLIGHT ID": v['flight']['identification']['number']['default'],
+                            "ORIG STATION": v['target_apt'],
+                            "MET RISK": icono + " " + prob,
+                            "WIND (KM/H)": f"{viento}"
                         })
         except: pass
     if res_dep: 
-        df_dep = pd.DataFrame(res_dep).sort_values("TIME (Z)")
+        df_dep = pd.DataFrame(res_dep).sort_values("TIME (ZULU)")
         st.dataframe(df_dep, use_container_width=True, hide_index=True)
-    else: st.info("NO MATCHING DEPARTURES FOUND.")
+    else: st.info("NO MATCHING TACTICAL DEPARTURES DETECTED.")
