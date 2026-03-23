@@ -8,9 +8,21 @@ import concurrent.futures
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 import altair as alt
+import joblib
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Control de Operaciones", page_icon="✈️", layout="wide")
+st.set_page_config(page_title="IA Control de Operaciones", page_icon="✈️", layout="wide")
+
+# --- CARGA DEL MODELO IA ---
+@st.cache_resource
+def cargar_modelo_ia():
+    try:
+        return joblib.load('modelo_vuelos_final.joblib')
+    except Exception as e:
+        st.error(f"⚠️ No se encontró el archivo 'modelo_vuelos_final.joblib'. {e}")
+        return None
+
+MODELO_IA = cargar_modelo_ia()
 
 # --- BASE DE DATOS DE AEROPUERTOS ---
 AEROPUERTOS = {
@@ -31,14 +43,14 @@ aeropuerto_destino = st.sidebar.selectbox(
 
 horas_prediccion = st.sidebar.slider("⏳ Horas de previsión a mostrar", min_value=1, max_value=24, value=15)
 
-st.sidebar.markdown("### 🔍 Filtros de Visualización")
+st.sidebar.markdown("### 🔍 Filtros de Riesgo IA")
 mostrar_baja = st.sidebar.checkbox("🟢 Probabilidad BAJA", value=True)
-mostrar_moderada = st.sidebar.checkbox("🟠 Probabilidad MODERADA", value=True)
+mostrar_moderada = st.sidebar.checkbox("🟠 Probabilidad MEDIA", value=True)
 mostrar_alta = st.sidebar.checkbox("🔴 Probabilidad ALTA", value=True)
 
 filtros_activos = []
 if mostrar_baja: filtros_activos.append("BAJA")
-if mostrar_moderada: filtros_activos.append("MODERADA")
+if mostrar_moderada: filtros_activos.append("MEDIA")
 if mostrar_alta: filtros_activos.append("ALTA")
 
 if st.sidebar.button("🔄 Refrescar Datos Ahora"):
@@ -64,32 +76,84 @@ def calcular_distancia_nm(lat1, lon1, lat2, lon2):
 
 @st.cache_data(ttl=3600) 
 def obtener_predicciones_globales(iatas):
+    """Descarga de Open-Meteo TODAS las variables necesarias para la IA"""
     dicc_global = {}
     url = "https://api.open-meteo.com/v1/forecast"
     for apt in iatas:
         parametros = {
             "latitude": AEROPUERTOS[apt]["coords"][0],
             "longitude": AEROPUERTOS[apt]["coords"][1],
-            "hourly": "wind_speed_10m,wind_direction_10m,precipitation",
-            "wind_speed_unit": "kmh",
-            "precipitation_unit": "mm",
+            "hourly": "wind_speed_10m,wind_gusts_10m,visibility,cloudcover,temperature_2m,precipitation",
+            "wind_speed_unit": "kn", # La IA se entrenó en Nudos (KTS)
             "timezone": "UTC"
         }
         try:
             datos = requests.get(url, params=parametros).json()
             tiempos = datos["hourly"]["time"]
-            vientos = datos["hourly"]["wind_speed_10m"]
-            direcciones = datos["hourly"]["wind_direction_10m"]
-            precipitaciones = datos["hourly"]["precipitation"]
             
-            dicc_global[apt] = {
-                "viento": {tiempos[i]: vientos[i] for i in range(len(tiempos))},
-                "direccion": {tiempos[i]: direcciones[i] for i in range(len(tiempos))},
-                "precipitacion": {tiempos[i]: precipitaciones[i] for i in range(len(tiempos))}
-            }
+            clima_hora = {}
+            for i, t in enumerate(tiempos):
+                clima_hora[t] = {
+                    'viento_kts': datos["hourly"]["wind_speed_10m"][i] or 0,
+                    'rafagas_kts': datos["hourly"]["wind_gusts_10m"][i] or 0,
+                    'visib_m': datos["hourly"]["visibility"][i] or 10000,
+                    'nubes_pct': datos["hourly"]["cloudcover"][i] or 0,
+                    'temp_c': datos["hourly"]["temperature_2m"][i] or 15,
+                    'precip': datos["hourly"]["precipitation"][i] or 0
+                }
+            dicc_global[apt] = clima_hora
         except:
-            dicc_global[apt] = {"viento": {}, "direccion": {}, "precipitacion": {}}
+            dicc_global[apt] = {}
     return dicc_global
+
+def extraer_clima_hora(iata, hora_dt, dicc_meteo):
+    """Extrae las 5 variables climáticas para una hora concreta. 
+    Si el aeropuerto no es uno de nuestros 4 principales, asume 'clima de laboratorio' ideal."""
+    clima_ideal = {'viento_kts': 0.0, 'rafagas_kts': 0.0, 'visib_m': 10000.0, 'nubes_pct': 0.0, 'temp_c': 15.0}
+    
+    if iata not in dicc_meteo:
+        return clima_ideal
+        
+    hora_redondeada = hora_dt.replace(minute=0, second=0, microsecond=0)
+    hora_str = hora_redondeada.strftime("%Y-%m-%dT%H:00")
+    
+    return dicc_meteo[iata].get(hora_str, clima_ideal)
+
+def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
+    """Núcleo del Machine Learning: Carga el clima origen-destino y evalúa el Árbol"""
+    if not MODELO_IA:
+        return "N/A", "Desconocida", "gray", "⚪ Error IA"
+        
+    # Extraemos clima simultáneo (o asumimos ideal si viene de fuera)
+    c_orig = extraer_clima_hora(origen, hora_vuelo_dt, dicc_meteo)
+    c_dest = extraer_clima_hora(destino, hora_vuelo_dt, dicc_meteo)
+    
+    # Codificadores seguros (Si viene de 'MAD' o vuela 'Iberia', le asignamos la clase 0 para no romper el programa)
+    try:
+        enc_orig = MODELO_IA['le_orig'].transform([origen])[0] if origen in MODELO_IA['le_orig'].classes_ else 0
+        enc_dest = MODELO_IA['le_dest'].transform([destino])[0] if destino in MODELO_IA['le_dest'].classes_ else 0
+        enc_carr = MODELO_IA['le_carrier'].transform([aerolinea])[0] if aerolinea in MODELO_IA['le_carrier'].classes_ else 0
+    except:
+        enc_orig, enc_dest, enc_carr = 0, 0, 0
+
+    # Armamos el DataFrame exacto que pide el modelo
+    input_df = pd.DataFrame([[
+        c_orig['viento_kts'], c_orig['rafagas_kts'], c_orig['visib_m'], c_orig['nubes_pct'], c_orig['temp_c'],
+        c_dest['viento_kts'], c_dest['rafagas_kts'], c_dest['visib_m'], c_dest['nubes_pct'], c_dest['temp_c'],
+        enc_orig, enc_dest, enc_carr
+    ]], columns=MODELO_IA['features'])
+    
+    # ¡Magia!
+    prob = MODELO_IA['modelo'].predict_proba(input_df)[0][1]
+    
+    # Sistema de Alertas
+    texto_prob = f"{prob:.1%}"
+    if prob < 0.25:
+        return texto_prob, "BAJA", "green", "🟢 Baja"
+    elif prob < 0.60:
+        return texto_prob, "MEDIA", "orange", "🟡 Media"
+    else:
+        return texto_prob, "ALTA", "red", "🔴 Alta"
 
 @st.cache_data(ttl=300)
 def obtener_url_radar_lluvia():
@@ -100,375 +164,196 @@ def obtener_url_radar_lluvia():
     except:
         return None
 
-def evaluar_probabilidad_cancelacion(hora_dt, dicc_meteo_apt):
-    if not dicc_meteo_apt or not dicc_meteo_apt.get("viento"):
-        return "?", "Desconocida", "gray", "⚪ Desconocida"
-        
-    minutos = hora_dt.minute
-    if minutos >= 30:
-        hora_redondeada = hora_dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    else:
-        hora_redondeada = hora_dt.replace(minute=0, second=0, microsecond=0)
-        
-    hora_clave = hora_redondeada.strftime("%Y-%m-%dT%H:00")
-    viento_kmh = dicc_meteo_apt["viento"].get(hora_clave)
-    
-    if viento_kmh is None:
-        return "?", "Sin Datos", "gray", "⚪ Sin Datos"
-        
-    viento_kmh = round(viento_kmh, 1)
-    
-    if viento_kmh < 10:
-        return viento_kmh, "BAJA", "green", "🟢 Baja"
-    elif 10 <= viento_kmh <= 40:
-        return viento_kmh, "MODERADA", "orange", "🟠 Moderada"
-    else:
-        return viento_kmh, "ALTA", "red", "🔴 Alta"
-
+# --- OTRAS UTILIDADES (Fotos y Metar) ---
 @st.cache_data(ttl=300)
 def obtener_metar_taf(iata):
     icao = f"K{iata}"
     try:
         metar_req = requests.get(f"https://aviationweather.gov/api/data/metar?ids={icao}&format=raw", timeout=5)
-        metar_txt = metar_req.text.strip() if metar_req.status_code == 200 and metar_req.text else f"No hay METAR disponible para {icao}."
-        
+        metar_txt = metar_req.text.strip() if metar_req.status_code == 200 and metar_req.text else f"No hay METAR para {icao}."
         taf_req = requests.get(f"https://aviationweather.gov/api/data/taf?ids={icao}&format=raw", timeout=5)
-        taf_txt = taf_req.text.strip() if taf_req.status_code == 200 and taf_req.text else f"No hay TAF disponible para {icao}."
-        
+        taf_txt = taf_req.text.strip() if taf_req.status_code == 200 and taf_req.text else f"No hay TAF para {icao}."
         return metar_txt, taf_txt
     except:
-        return "Error de conexión al servidor de la FAA.", "Error de conexión al servidor de la FAA."
+        return "Error de conexión", "Error de conexión"
 
-# --- EXTRACCIÓN DE FOTOS CON COPYRIGHT (PLANESPOTTERS) ---
 @st.cache_data(ttl=86400)
 def obtener_foto_aeronave(matricula):
-    if not matricula or matricula == "N/A":
-        return None, None, None
+    if not matricula or matricula == "N/A": return None, None, None
     try:
         headers = {'User-Agent': 'FlightWxPro/1.0'}
-        url = f"https://api.planespotters.net/pub/photos/reg/{matricula}"
-        r = requests.get(url, headers=headers, timeout=3)
+        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=3)
         if r.status_code == 200:
             data = r.json()
             if data.get('photos'):
-                foto_url = data['photos'][0]['thumbnail_large']['src']
-                link = data['photos'][0]['link']
-                fotografo = data['photos'][0]['photographer']
-                return foto_url, link, fotografo
-    except:
-        pass
+                return data['photos'][0]['thumbnail_large']['src'], data['photos'][0]['link'], data['photos'][0]['photographer']
+    except: pass
     return None, None, None
 
-# --- EXTRACCIÓN SEGURA ---
 @st.cache_data(ttl=86400)
 def obtener_mapa_aerolineas():
     try:
-        api = FlightRadar24API()
-        aerolineas = api.get_airlines()
-        mapa = {}
-        for a in aerolineas:
-            if 'ICAO' in a and 'Name' in a:
-                mapa[a['ICAO']] = a['Name']
-            if 'Code' in a and 'Name' in a:
-                mapa[a['Code']] = a['Name']
-        return mapa
-    except:
-        return {}
+        aerolineas = FlightRadar24API().get_airlines()
+        return {a.get('ICAO', a.get('Code')): a['Name'] for a in aerolineas if 'Name' in a}
+    except: return {}
 
-def obtener_iata_seguro(nodo_aeropuerto):
-    try:
-        if isinstance(nodo_aeropuerto, dict):
-            code = nodo_aeropuerto.get('code')
-            if isinstance(code, dict):
-                return code.get('iata', "N/A")
-    except Exception:
-        pass
-    return "N/A"
-
-def obtener_aerolinea(vuelo):
-    try:
-        if isinstance(vuelo, dict):
-            flight = vuelo.get('flight')
-            if isinstance(flight, dict):
-                airline = flight.get('airline')
-                if isinstance(airline, dict):
-                    return airline.get('name', "N/A")
-    except Exception:
-        pass
-    return "N/A"
+def obtener_iata_seguro(nodo):
+    try: return nodo.get('code', {}).get('iata', 'N/A')
+    except: return 'N/A'
 
 def obtener_num_vuelo_seguro(vuelo_dict):
-    try:
-        ident = (vuelo_dict.get('flight') or {}).get('identification') or {}
-        num = ident.get('number') or {}
-        resultado = num.get('default')
-        return resultado if resultado else "N/A"
-    except Exception:
-        return "N/A"
+    try: return vuelo_dict.get('flight', {}).get('identification', {}).get('number', {}).get('default', 'N/A')
+    except: return 'N/A'
 
-# --- FUNCIONES DE FLIGHTRADAR ---
+# --- EXTRACCIÓN DE VUELOS ---
 @st.cache_data(ttl=60)
 def obtener_datos_vuelos(iatas):
     fr_api = FlightRadar24API()
-    vuelos_aire_crudo, llegadas, salidas = [], [], []
+    vuelos_aire, llegadas, salidas = [], [], []
     
     try:
-        todos_vuelos = fr_api.get_flights()
-        for v in todos_vuelos:
+        for v in fr_api.get_flights():
             if v.ground_speed > 0:
                for apt in iatas:
-                   coords = AEROPUERTOS[apt]["coords"]
-                   dist = calcular_distancia_nm(v.latitude, v.longitude, coords[0], coords[1])
+                   dist = calcular_distancia_nm(v.latitude, v.longitude, AEROPUERTOS[apt]["coords"][0], AEROPUERTOS[apt]["coords"][1])
                    if dist < 500:
-                      vuelos_aire_crudo.append(v)
+                      vuelos_aire.append(v)
                       break
-    except Exception as e:
-        pass
+    except: pass
 
     for apt in iatas:
         try:
-            detalles_apt = fr_api.get_airport_details(apt)
-            arr = detalles_apt['airport']['pluginData']['schedule']['arrivals']['data']
-            dep = detalles_apt['airport']['pluginData']['schedule']['departures']['data']
-            
+            detalles = fr_api.get_airport_details(apt)
+            arr = detalles['airport']['pluginData']['schedule']['arrivals']['data']
+            dep = detalles['airport']['pluginData']['schedule']['departures']['data']
             for v in arr: v['target_apt'] = apt
             for v in dep: v['target_apt'] = apt
-                
             llegadas.extend(arr)
             salidas.extend(dep)
-        except Exception as e:
-            pass
+        except: pass
             
-    return vuelos_aire_crudo, llegadas, salidas
+    return vuelos_aire, llegadas, salidas
 
-# --- CARGA DE DATOS PRINCIPAL ---
+# --- INICIALIZACIÓN ---
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('Actualizando posiciones y radares...'):
+with st.spinner('Procesando telemetría y consultando a la IA...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
-# --- CREACIÓN DE FILTROS AVANZADOS EN LA BARRA LATERAL ---
+# --- FILTROS LATERALES DINÁMICOS ---
 st.sidebar.divider()
 st.sidebar.markdown("### 🔎 Filtros Avanzados")
-
-aerolineas_disponibles = set()
-aeropuertos_disponibles = set()
-numeros_vuelo_disponibles = set()
+aerolineas_disponibles, aeropuertos_disponibles, numeros_vuelo_disponibles = set(), set(), set()
 
 for v in llegadas + salidas:
-    al = obtener_aerolinea(v)
-    if al != "N/A": aerolineas_disponibles.add(al)
-    
     orig = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('origin'))
     dest = obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('destination'))
     num = obtener_num_vuelo_seguro(v)
+    al = v.get('flight', {}).get('airline', {}).get('name', "N/A")
     
+    if al != "N/A": aerolineas_disponibles.add(al)
     if orig != "N/A": aeropuertos_disponibles.add(orig)
     if dest != "N/A": aeropuertos_disponibles.add(dest)
     if num != "N/A": numeros_vuelo_disponibles.add(num)
 
 for v in vuelos_aire_crudo:
-    destino_temp = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
-    if destino_temp in lista_iatas:
+    dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
+    if dest in lista_iatas:
         callsign = getattr(v, 'callsign', 'N/A')
-        if callsign != "N/A" and callsign.strip() != "":
-            numeros_vuelo_disponibles.add(callsign)
-            
-        airline_icao = getattr(v, 'airline_icao', 'N/A')
-        al_name = mapa_aerolineas.get(airline_icao, "N/A")
-        if al_name != "N/A":
-            aerolineas_disponibles.add(al_name)
+        al_name = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
+        if callsign != "N/A": numeros_vuelo_disponibles.add(callsign)
+        if al_name != "N/A": aerolineas_disponibles.add(al_name)
 
 filtro_aerolineas = st.sidebar.multiselect("✈️ Filtrar por Aerolínea", sorted(list(aerolineas_disponibles)))
 filtro_aeropuertos = st.sidebar.multiselect("📍 Filtrar por Aeropuerto", sorted(list(aeropuertos_disponibles)))
-filtro_vuelos = st.sidebar.multiselect("🔢 Filtrar por Nº Vuelo", sorted(list(numeros_vuelo_disponibles)), placeholder="Escribe para buscar...")
+filtro_vuelos = st.sidebar.multiselect("🔢 Filtrar por Nº Vuelo", sorted(list(numeros_vuelo_disponibles)), placeholder="Buscar...")
 
-# --- FILTRADO ESTRICTO DE VUELOS EN AIRE PARA EL MAPA ---
 vuelos_aire_filtrados = []
 for v in vuelos_aire_crudo:
     destino = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
     origen = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
     callsign = getattr(v, 'callsign', 'N/A')
-    
-    airline_icao = getattr(v, 'airline_icao', 'N/A')
-    aerolinea_vuelo = mapa_aerolineas.get(airline_icao, "N/A")
+    aerolinea_vuelo = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
     
     if destino in lista_iatas:
-        pasa_filtro_apt = (not filtro_aeropuertos) or (origen in filtro_aeropuertos) or (destino in filtro_aeropuertos)
-        pasa_filtro_vuelo = (not filtro_vuelos) or (callsign in filtro_vuelos)
-        pasa_filtro_al = (not filtro_aerolineas) or (aerolinea_vuelo in filtro_aerolineas)
-        
-        if pasa_filtro_apt and pasa_filtro_vuelo and pasa_filtro_al:
+        if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
+           (not filtro_vuelos or callsign in filtro_vuelos) and \
+           (not filtro_aerolineas or aerolinea_vuelo in filtro_aerolineas):
             v.nombre_aerolinea_mapeado = aerolinea_vuelo
             vuelos_aire_filtrados.append(v)
 
-# --- PRE-CARGA MULTIHILO DE FOTOGRAFÍAS ---
-matriculas_mapa = list(set([
-    getattr(v, 'registration', 'N/A') 
-    for v in vuelos_aire_filtrados 
-    if getattr(v, 'registration', 'N/A') != 'N/A'
-]))
-
+matriculas_mapa = list(set([getattr(v, 'registration', 'N/A') for v in vuelos_aire_filtrados if getattr(v, 'registration', 'N/A') != 'N/A']))
 dicc_fotos = {}
 if matriculas_mapa:
-    with st.spinner(f"Descargando {len(matriculas_mapa)} imágenes en paralelo..."):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-            futuros = {executor.submit(obtener_foto_aeronave, mat): mat for mat in matriculas_mapa}
-            for futuro in concurrent.futures.as_completed(futuros):
-                mat = futuros[futuro]
-                try:
-                    dicc_fotos[mat] = futuro.result()
-                except Exception:
-                    dicc_fotos[mat] = (None, None, None)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        futuros = {executor.submit(obtener_foto_aeronave, mat): mat for mat in matriculas_mapa}
+        for f in concurrent.futures.as_completed(futuros):
+            dicc_fotos[futuros[f]] = f.result()
 
-# --- CÁLCULO DE TIEMPOS ---
 hora_actual = datetime.now(timezone.utc)
 limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
-# --- CUERPO PRINCIPAL ---
+# --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
-st.markdown(f"""
-**Monitorización de vuelos para:** {', '.join(lista_iatas)}  
-⏱️ **Hora del Sistema (UTC):** `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`
-""")
+st.markdown(f"**Powered by AI Predictions** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
 
-# --- KPIs SUPERIORES ---
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Vuelos Escaneados", len(vuelos_aire_filtrados), "En aire hacia bases")
-col2.metric("Llegadas Prog.", len(llegadas), f"Límite API: 100/Aeropuerto")
-col3.metric("Salidas Prog.", len(salidas), f"Límite API: 100/Aeropuerto")
+col1.metric("Vuelos en Radar", len(vuelos_aire_filtrados), "Acercándose a bases")
+col2.metric("Llegadas Prog.", len(llegadas), "Límite: 100")
+col3.metric("Salidas Prog.", len(salidas), "Límite: 100")
 
 if aeropuerto_destino == "TODOS":
-    col4.metric("Bases Monitorizadas", len(lista_iatas), "Red Completa")
+    col4.metric("Estado Modelo IA", "ACTIVO", "Monitorizando Red")
 else:
-    viento_actual, prob_actual, _, _ = evaluar_probabilidad_cancelacion(hora_actual, dicc_meteo_global.get(aeropuerto_destino, {}))
-    col4.metric(f"Viento en {aeropuerto_destino}", f"{viento_actual} km/h", prob_actual, delta_color="inverse" if prob_actual == "ALTA" else "normal")
+    clima_actual = extraer_clima_hora(aeropuerto_destino, hora_actual, dicc_meteo_global)
+    col4.metric(f"Viento en {aeropuerto_destino}", f"{round(clima_actual['viento_kts'])} kts", "Ráfagas: " + str(round(clima_actual['rafagas_kts'])), delta_color="off")
 
 st.divider()
 
 # --- PESTAÑAS ---
-tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar en Vivo", "🛬 Panel de Llegadas", "🛫 Panel de Salidas", "📊 Dashboard Analítico"])
+tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar IA en Vivo", "🛬 Llegadas", "🛫 Salidas", "📊 Dashboard Meteo"])
 
 with tab1:
-    if aeropuerto_destino == "TODOS":
-        map_center = [39.5, -98.35]
-        zoom = 4
-    else:
-        map_center = AEROPUERTOS[aeropuerto_destino]["coords"]
-        zoom = 5
-        
-    mapa = folium.Map(location=map_center, zoom_start=zoom, tiles="CartoDB dark_matter")
+    map_center = [39.5, -98.35] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
+    mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 5, tiles="CartoDB dark_matter")
     
     url_lluvia = obtener_url_radar_lluvia()
     if url_lluvia:
-        folium.TileLayer(
-            tiles=url_lluvia,
-            attr='Weather data © RainViewer',
-            name='Radar de Precipitaciones',
-            overlay=True,
-            control=True,
-            opacity=0.55
-        ).add_to(mapa)
-    
-    hora_redondeada = hora_actual.replace(minute=0, second=0, microsecond=0)
-    hora_clave = hora_redondeada.strftime("%Y-%m-%dT%H:00")
+        folium.TileLayer(tiles=url_lluvia, attr='RainViewer', name='Radar', overlay=True, control=True, opacity=0.55).add_to(mapa)
 
     for apt in lista_iatas:
-        folium.Marker(
-            location=AEROPUERTOS[apt]["coords"], 
-            popup=f"<b>{AEROPUERTOS[apt]['nombre']} ({apt})</b>", 
-            icon=folium.Icon(color="black", icon="building", prefix="fa")
-        ).add_to(mapa)
+        folium.Marker(location=AEROPUERTOS[apt]["coords"], popup=f"<b>{AEROPUERTOS[apt]['nombre']}</b>", icon=folium.Icon(color="black", icon="building", prefix="fa")).add_to(mapa)
 
-        dir_viento = dicc_meteo_global.get(apt, {}).get("direccion", {}).get(hora_clave)
-        vel_viento = dicc_meteo_global.get(apt, {}).get("viento", {}).get(hora_clave)
-        
-        if vel_viento is not None and dir_viento is not None:
-            rotacion_flecha = (dir_viento + 180) % 360
-            html_vector_viento = f"""
-            <div style='font-family: Arial; font-size: 11px; color: #fff; font-weight: bold; background: rgba(15,23,42,0.8); border: 1px solid #3b82f6; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; white-space: nowrap; transform: translate(15px, -15px);'>
-                <i class='fa fa-arrow-up' style='transform: rotate({rotacion_flecha}deg); margin-right: 4px; color: #3b82f6;'></i>
-                {vel_viento} km/h
-            </div>
-            """
-            folium.Marker(
-                location=AEROPUERTOS[apt]["coords"],
-                icon=folium.DivIcon(html=html_vector_viento)
-            ).add_to(mapa)
-    
     vuelos_pintados = 0
     for vuelo in vuelos_aire_filtrados:
         destino = str(getattr(vuelo, 'destination_airport_iata', 'N/A')).upper()
         origen = str(getattr(vuelo, 'origin_airport_iata', 'N/A')).upper()
         callsign = getattr(vuelo, 'callsign', 'N/A')
-        aerolinea = getattr(vuelo, 'nombre_aerolinea_mapeado', 'N/A')
+        aerolinea_nom = getattr(vuelo, 'nombre_aerolinea_mapeado', 'N/A')
+        aerolinea_iata = getattr(vuelo, 'airline_iata', 'N/A') # IATA necesario para la IA
         
-        altitud = getattr(vuelo, 'altitude', 'N/A')
-        velocidad = getattr(vuelo, 'ground_speed', 'N/A')
-        rumbo = getattr(vuelo, 'heading', 'N/A')
-        matricula = getattr(vuelo, 'registration', 'N/A')
-        modelo = getattr(vuelo, 'aircraft_code', 'N/A')
-        v_speed = getattr(vuelo, 'vertical_speed', 0)
-        
-        v_speed_str = f"+{v_speed}" if v_speed > 0 else str(v_speed)
-        v_speed_color = "green" if v_speed > 0 else "red" if v_speed < 0 else "gray"
-        
-        coords_destino = AEROPUERTOS[destino]["coords"]
-        dist = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, coords_destino[0], coords_destino[1])
-        horas_restantes = dist / max(vuelo.ground_speed, 1)
+        horas_restantes = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(vuelo.ground_speed, 1)
         eta = hora_actual + timedelta(hours=horas_restantes)
         
-        viento, prob, color, icono = evaluar_probabilidad_cancelacion(eta, dicc_meteo_global[destino])
+        # --- LLAMADA AL MODELO IA ---
+        score_texto, prob, color, icono = predecir_riesgo_ia(origen, destino, aerolinea_iata, eta, dicc_meteo_global)
         
         if prob in filtros_activos:
-            foto_url, foto_link, fotografo = dicc_fotos.get(matricula, (None, None, None))
+            foto_url, foto_link, fotografo = dicc_fotos.get(getattr(vuelo, 'registration', 'N/A'), (None, None, None))
+            foto_html = f"<img src='{foto_url}' width='100%' style='border-radius:4px;'>" if foto_url else ""
             
-            foto_html = ""
-            if foto_url:
-                foto_html = f"""
-                <div style="margin-bottom: 8px;">
-                    <a href="{foto_link}" target="_blank" title="Ver imagen original">
-                        <img src="{foto_url}" width="100%" style="border-radius: 4px; border: 1px solid #ccc; max-height: 140px; object-fit: cover;">
-                    </a>
-                    <div style="font-size: 8px; color: #64748b; text-align: right; margin-top: 2px;">
-                        © {fotografo} | Planespotters.net
-                    </div>
-                </div>
-                """
-            else:
-                foto_html = f"""
-                <div style="margin-bottom: 8px; text-align: center; background: #e2e8f0; padding: 10px; border-radius: 4px; font-size: 11px;">
-                    <a href="https://www.jetphotos.com/registration/{matricula}" target="_blank" style="text-decoration: none; color: #3b82f6;">
-                        📷 Buscar archivo de {matricula} en JetPhotos
-                    </a>
-                </div>
-                """
-
             html_popup = f"""
             <div style='font-family: Arial; font-size: 12px; width: 250px;'>
                 {foto_html}
-                <h4 style='margin-bottom: 2px; color: {color};'>✈️ {callsign} | {aerolinea}</h4>
-                <div style='font-size: 10px; color: gray; margin-bottom: 8px;'>Matrícula: {matricula} | Equipo: {modelo}</div>
-                
+                <h4 style='color: {color}; margin-bottom: 2px;'>✈️ {callsign} | {aerolinea_nom}</h4>
                 <b>Ruta:</b> {origen} ➔ <b>{destino}</b><br>
+                <b>Alt:</b> {getattr(vuelo, 'altitude', 'N/A')} ft | <b>Vel:</b> {getattr(vuelo, 'ground_speed', 'N/A')} kts<br>
                 <hr style='margin: 4px 0;'>
-                
-                <div style='display: flex; justify-content: space-between;'>
-                    <span><b>Alt:</b> {altitud} ft</span>
-                    <span><b>Vel:</b> {velocidad} kts</span>
-                </div>
-                <div style='display: flex; justify-content: space-between;'>
-                    <span><b>Rumbo:</b> {rumbo}°</span>
-                    <span><b>V/S:</b> <span style='color: {v_speed_color};'>{v_speed_str} fpm</span></span>
-                </div>
-                
-                <hr style='margin: 4px 0;'>
-                <b>Faltan:</b> {round(horas_restantes, 1)} h <b>(ETA:</b> {eta.strftime('%H:%M')}Z)<br>
-                <b>Riesgo:</b> <span style='color:{color}'><b>{prob}</b></span> | <b>Viento:</b> {viento} km/h
+                <b>ETA:</b> {eta.strftime('%H:%M')}Z (Faltan {round(horas_restantes, 1)}h)<br>
+                <b>RIESGO IA:</b> <span style='color:{color}; font-size:14px;'><b>{score_texto} ({prob})</b></span>
             </div>
             """
-            
             folium.Marker(
                 location=[vuelo.latitude, vuelo.longitude],
                 popup=folium.Popup(html_popup, max_width=300),
@@ -477,212 +362,72 @@ with tab1:
             vuelos_pintados += 1
 
     st_folium(mapa, width=1200, height=600, returned_objects=[])
-    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo.")
+    st.success(f"Radar Activo: Analizando riesgo de **{vuelos_pintados}** aeronaves mediante el modelo predictivo.")
 
 with tab2:
     datos_llegadas = []
     for vuelo in llegadas:
-        try:
-            timestamp_sched = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival')
-            timestamp_est = vuelo.get('flight', {}).get('time', {}).get('estimated', {}).get('arrival') or vuelo.get('flight', {}).get('time', {}).get('real', {}).get('arrival')
-            
-            if timestamp_sched:
-                hora_vuelo = datetime.fromtimestamp(timestamp_sched, timezone.utc)
-                if hora_actual <= hora_vuelo <= limite_tiempo:
-                    
-                    target_apt = vuelo.get('target_apt')
-                    viento, prob, color, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global.get(target_apt, {}))
-                    
-                    origen = obtener_iata_seguro(vuelo.get('flight', {}).get('airport', {}).get('origin'))
-                    aerolinea = obtener_aerolinea(vuelo)
-                    num_vuelo = obtener_num_vuelo_seguro(vuelo)
-                    
-                    aircraft_data = vuelo.get('flight', {}).get('aircraft') or {}
-                    modelo_avion = (aircraft_data.get('model') or {}).get('code', 'N/A')
-                    matricula_avion = aircraft_data.get('registration', 'N/A')
-                    
-                    pasa_filtro_al = (not filtro_aerolineas) or (aerolinea in filtro_aerolineas)
-                    pasa_filtro_apt = (not filtro_aeropuertos) or (origen in filtro_aeropuertos or target_apt in filtro_aeropuertos)
-                    pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
-                    
-                    if prob in filtros_activos and pasa_filtro_al and pasa_filtro_apt and pasa_filtro_vuelo:
-                        
-                        hora_prog_str = hora_vuelo.strftime('%H:%M')
-                        hora_est_str = datetime.fromtimestamp(timestamp_est, timezone.utc).strftime('%H:%M') if timestamp_est else "N/A"
-                        
-                        datos_llegadas.append({
-                            "Programado (Z)": hora_prog_str,
-                            "Estimado (Z)": hora_est_str,
-                            "Vuelo": num_vuelo,
-                            "Aerolínea": aerolinea,
-                            "Aeronave": modelo_avion,
-                            "Matrícula": matricula_avion,
-                            "Origen": origen,
-                            "Destino": target_apt,
-                            "Riesgo": icono
-                        })
-        except:
-            pass
-            
-    if datos_llegadas:
-        df_arr = pd.DataFrame(datos_llegadas).sort_values(by="Programado (Z)")
-        st.dataframe(df_arr, use_container_width=True)
-    else:
-        st.info("No hay llegadas programadas que coincidan con los filtros en este rango de horas.")
+        timestamp = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival')
+        if timestamp:
+            hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
+            if hora_actual <= hora_vuelo <= limite_tiempo:
+                target = vuelo.get('target_apt')
+                origen = obtener_iata_seguro(vuelo.get('flight', {}).get('airport', {}).get('origin'))
+                aerolinea = vuelo.get('flight', {}).get('airline', {}).get('name', 'N/A')
+                carrier_iata = vuelo.get('flight', {}).get('airline', {}).get('code', {}).get('iata', 'N/A')
+                num_vuelo = obtener_num_vuelo_seguro(vuelo)
+                
+                # --- LLAMADA AL MODELO IA ---
+                score_texto, prob, color, icono = predecir_riesgo_ia(origen, target, carrier_iata, hora_vuelo, dicc_meteo_global)
+                
+                if prob in filtros_activos and (not filtro_aerolineas or aerolinea in filtro_aerolineas) and \
+                   (not filtro_aeropuertos or origen in filtro_aeropuertos or target in filtro_aeropuertos) and \
+                   (not filtro_vuelos or num_vuelo in filtro_vuelos):
+                    datos_llegadas.append({
+                        "Prog (Z)": hora_vuelo.strftime('%H:%M'), "Vuelo": num_vuelo, "Aerolínea": aerolinea,
+                        "Origen": origen, "Destino": target, "Probabilidad IA": score_texto, "Nivel Alerta": icono
+                    })
+    if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Prog (Z)"), use_container_width=True)
 
 with tab3:
     datos_salidas = []
     for vuelo in salidas:
-        try:
-            timestamp_sched = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('departure')
-            timestamp_est = vuelo.get('flight', {}).get('time', {}).get('estimated', {}).get('departure') or vuelo.get('flight', {}).get('time', {}).get('real', {}).get('departure')
-            
-            if timestamp_sched:
-                hora_vuelo = datetime.fromtimestamp(timestamp_sched, timezone.utc)
-                if hora_actual <= hora_vuelo <= limite_tiempo:
-                    
-                    target_apt = vuelo.get('target_apt')
-                    viento, prob, color, icono = evaluar_probabilidad_cancelacion(hora_vuelo, dicc_meteo_global.get(target_apt, {}))
-                    
-                    destino = obtener_iata_seguro(vuelo.get('flight', {}).get('airport', {}).get('destination'))
-                    aerolinea = obtener_aerolinea(vuelo)
-                    num_vuelo = obtener_num_vuelo_seguro(vuelo)
-                    
-                    aircraft_data = vuelo.get('flight', {}).get('aircraft') or {}
-                    modelo_avion = (aircraft_data.get('model') or {}).get('code', 'N/A')
-                    matricula_avion = aircraft_data.get('registration', 'N/A')
-                    
-                    pasa_filtro_al = (not filtro_aerolineas) or (aerolinea in filtro_aerolineas)
-                    pasa_filtro_apt = (not filtro_aeropuertos) or (destino in filtro_aeropuertos or target_apt in filtro_aeropuertos)
-                    pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
-                    
-                    if prob in filtros_activos and pasa_filtro_al and pasa_filtro_apt and pasa_filtro_vuelo:
-                        
-                        hora_prog_str = hora_vuelo.strftime('%H:%M')
-                        hora_est_str = datetime.fromtimestamp(timestamp_est, timezone.utc).strftime('%H:%M') if timestamp_est else "N/A"
-                        
-                        datos_salidas.append({
-                            "Programado (Z)": hora_prog_str,
-                            "Estimado (Z)": hora_est_str,
-                            "Vuelo": num_vuelo,
-                            "Aerolínea": aerolinea,
-                            "Aeronave": modelo_avion,
-                            "Matrícula": matricula_avion,
-                            "Origen": target_apt,
-                            "Destino": destino,
-                            "Riesgo": icono
-                        })
-        except:
-            pass
-            
-    if datos_salidas:
-        df_dep = pd.DataFrame(datos_salidas).sort_values(by="Programado (Z)")
-        st.dataframe(df_dep, use_container_width=True)
-    else:
-        st.info("No hay salidas programadas que coincidan con los filtros en este rango de horas.")
+        timestamp = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('departure')
+        if timestamp:
+            hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
+            if hora_actual <= hora_vuelo <= limite_tiempo:
+                target = vuelo.get('target_apt')
+                destino = obtener_iata_seguro(vuelo.get('flight', {}).get('airport', {}).get('destination'))
+                aerolinea = vuelo.get('flight', {}).get('airline', {}).get('name', 'N/A')
+                carrier_iata = vuelo.get('flight', {}).get('airline', {}).get('code', {}).get('iata', 'N/A')
+                num_vuelo = obtener_num_vuelo_seguro(vuelo)
+                
+                # --- LLAMADA AL MODELO IA ---
+                score_texto, prob, color, icono = predecir_riesgo_ia(target, destino, carrier_iata, hora_vuelo, dicc_meteo_global)
+                
+                if prob in filtros_activos and (not filtro_aerolineas or aerolinea in filtro_aerolineas) and \
+                   (not filtro_aeropuertos or target in filtro_aeropuertos or destino in filtro_aeropuertos) and \
+                   (not filtro_vuelos or num_vuelo in filtro_vuelos):
+                    datos_salidas.append({
+                        "Prog (Z)": hora_vuelo.strftime('%H:%M'), "Vuelo": num_vuelo, "Aerolínea": aerolinea,
+                        "Origen": target, "Destino": destino, "Probabilidad IA": score_texto, "Nivel Alerta": icono
+                    })
+    if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Prog (Z)"), use_container_width=True)
 
 with tab4:
     if aeropuerto_destino == "TODOS":
-        st.warning("⚠️ Selecciona un aeropuerto específico en la barra lateral para ver su dashboard detallado y los reportes METAR/TAF.")
+        st.warning("⚠️ Selecciona un aeropuerto específico para ver gráficos meteorológicos y METAR.")
     else:
-        col_dash1, col_dash2 = st.columns(2)
+        st.markdown(f"**Pronóstico de Viento (Nudos) - {aeropuerto_destino}**")
+        datos_v = dicc_meteo_global.get(aeropuerto_destino, {})
+        if datos_v:
+            vientos = {k: v['viento_kts'] for k, v in datos_v.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
+            st.line_chart(pd.DataFrame(list(vientos.values())[:24], index=[k[-5:] for k in list(vientos.keys())[:24]], columns=["Viento (kts)"]), color="#3b82f6")
         
-        with col_dash1:
-            st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
-            datos_viento = dicc_meteo_global.get(aeropuerto_destino, {}).get("viento", {})
-            if datos_viento:
-                vientos_futuros = {k: v for k, v in datos_viento.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
-                vientos_limitados = dict(list(vientos_futuros.items())[:24])
-                
-                df_clima = pd.DataFrame(
-                    list(vientos_limitados.values()), 
-                    index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in vientos_limitados.keys()],
-                    columns=["Viento (km/h)"]
-                )
-                st.line_chart(df_clima, color="#3b82f6")
-            else:
-                st.info("Sin datos meteorológicos disponibles.")
-                
-            st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
-            datos_precip = dicc_meteo_global.get(aeropuerto_destino, {}).get("precipitacion", {})
-            if datos_precip:
-                precip_futuras = {k: v for k, v in datos_precip.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
-                precip_limitadas = dict(list(precip_futuras.items())[:24])
-                
-                df_precip = pd.DataFrame(
-                    list(precip_limitadas.values()), 
-                    index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in precip_limitadas.keys()],
-                    columns=["Lluvia (mm)"]
-                )
-                st.bar_chart(df_precip, color="#3b82f6")
-            else:
-                st.info("Sin pronóstico de lluvia.")
-
-        with col_dash2:
-            st.markdown(f"**Distribución de Aerolíneas (Próximas {horas_prediccion}h)**")
-            todas_operaciones = []
-            
-            for v in llegadas + salidas:
-                if v.get('target_apt') == aeropuerto_destino:
-                    tipo = "Llegada" if v in llegadas else "Salida"
-                    timestamp = v.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival' if tipo == "Llegada" else 'departure')
-                    if timestamp:
-                        hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
-                        if hora_actual <= hora_vuelo <= limite_tiempo:
-                            al = obtener_aerolinea(v)
-                            if al != "N/A":
-                                todas_operaciones.append(al)
-            
-            if todas_operaciones:
-                df_aerolineas = pd.DataFrame(todas_operaciones, columns=["Aerolínea"])
-                conteo_al = df_aerolineas["Aerolínea"].value_counts().reset_index()
-                conteo_al.columns = ["Aerolínea", "Vuelos"]
-                
-                grafico_al = alt.Chart(conteo_al.head(10)).mark_bar(color="#10b981").encode(
-                    x=alt.X("Aerolínea", sort="-y", title=None),
-                    y=alt.Y("Vuelos", title="Cantidad de Vuelos"),
-                    tooltip=["Aerolínea", "Vuelos"]
-                ).properties(height=300)
-                
-                st.altair_chart(grafico_al, use_container_width=True)
-            else:
-                st.info("No hay suficientes datos de aerolíneas en esta franja horaria.")
-        
-        st.markdown("---")
-        st.markdown(f"**Carga Operativa: Vuelos Programados por Hora (Próximas {horas_prediccion}h)**")
-        
-        horas_continuas = [(hora_actual + timedelta(hours=i)).strftime('%H:00') for i in range(horas_prediccion + 1)]
-        conteo_horas_dict = {h: 0 for h in horas_continuas}
-        
-        for v in llegadas + salidas:
-            if v.get('target_apt') == aeropuerto_destino:
-                tipo = "Llegada" if v in llegadas else "Salida"
-                timestamp = v.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival' if tipo == "Llegada" else 'departure')
-                if timestamp:
-                    hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
-                    if hora_actual <= hora_vuelo <= limite_tiempo:
-                        hora_str = hora_vuelo.strftime('%H:00')
-                        if hora_str in conteo_horas_dict:
-                            conteo_horas_dict[hora_str] += 1
-                            
-        df_horas = pd.DataFrame(list(conteo_horas_dict.items()), columns=["Hora", "Vuelos"])
-        grafico_horas = alt.Chart(df_horas).mark_bar(color="#f59e0b").encode(
-            x=alt.X("Hora", sort=None, title=None),
-            y=alt.Y("Vuelos", title="Vuelos Programados"),
-            tooltip=["Hora", "Vuelos"]
-        ).properties(height=300)
-        
-        st.altair_chart(grafico_horas, use_container_width=True)
-        
-        # --- BLOQUE MOVIDO AL FINAL ---
-        st.markdown("---")
-        st.markdown(f"### 📋 Reportes Aeronáuticos (METAR / TAF) - {aeropuerto_destino}")
+        st.markdown(f"### 📋 Reportes Aeronáuticos Oficiales")
         metar_text, taf_text = obtener_metar_taf(aeropuerto_destino)
-        
-        c_metar, c_taf = st.columns(2)
-        with c_metar:
-            st.markdown("**METAR (Condiciones Actuales):**")
-            st.code(metar_text, language="text")
-        with c_taf:
-            st.markdown("**TAF (Pronóstico a 24/30h):**")
-            st.code(taf_text, language="text")
+        c1, c2 = st.columns(2)
+        c1.markdown("**METAR:**")
+        c1.code(metar_text)
+        c2.markdown("**TAF:**")
+        c2.code(taf_text)
