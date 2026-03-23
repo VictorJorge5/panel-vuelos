@@ -11,8 +11,6 @@ st.set_page_config(page_title="Aviator's Lens | Operations Control", page_icon="
 
 st.markdown("""""", unsafe_allow_html=True)
 
---- BASE DE DATOS DE AEROPUERTOS ---
-
 AEROPUERTOS = {
     "ATL": {"nombre": "Atlanta Hartsfield-Jackson", "coords": [33.6407, -84.4277]},
     "ORD": {"nombre": "Chicago O'Hare", "coords": [41.9742, -87.9073]},
