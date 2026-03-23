@@ -142,8 +142,7 @@ if aeropuerto_destino != "TODOS":
 else:
     c4.metric("ACTIVE BASES", len(lista_iatas), "NETWORK OK")
 
-st.markdown("
-", unsafe_allow_html=True)
+st.markdown("", unsafe_allow_html=True)
 
 tab1, tab2, tab3 = st.tabs(["[ 🗺️ RADAR FEED ]", "[ 🛬 ARRIVALS ]", "[ 🛫 DEPARTURES ]"])
 
