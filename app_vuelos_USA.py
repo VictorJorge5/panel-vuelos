@@ -346,7 +346,6 @@ with tab1:
         
     mapa = folium.Map(location=map_center, zoom_start=zoom, tiles="CartoDB dark_matter")
     
-    # Capa de Radar Meteorológico
     url_lluvia = obtener_url_radar_lluvia()
     if url_lluvia:
         folium.TileLayer(
@@ -470,9 +469,11 @@ with tab2:
     datos_llegadas = []
     for vuelo in llegadas:
         try:
-            timestamp = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival')
-            if timestamp:
-                hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
+            timestamp_sched = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('arrival')
+            timestamp_est = vuelo.get('flight', {}).get('time', {}).get('estimated', {}).get('arrival') or vuelo.get('flight', {}).get('time', {}).get('real', {}).get('arrival')
+            
+            if timestamp_sched:
+                hora_vuelo = datetime.fromtimestamp(timestamp_sched, timezone.utc)
                 if hora_actual <= hora_vuelo <= limite_tiempo:
                     
                     target_apt = vuelo.get('target_apt')
@@ -491,22 +492,26 @@ with tab2:
                     pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
                     
                     if prob in filtros_activos and pasa_filtro_al and pasa_filtro_apt and pasa_filtro_vuelo:
+                        
+                        hora_prog_str = hora_vuelo.strftime('%H:%M')
+                        hora_est_str = datetime.fromtimestamp(timestamp_est, timezone.utc).strftime('%H:%M') if timestamp_est else "N/A"
+                        
                         datos_llegadas.append({
-                            "Hora (UTC)": hora_vuelo.strftime('%H:%M'),
+                            "Programado (Z)": hora_prog_str,
+                            "Estimado (Z)": hora_est_str,
                             "Vuelo": num_vuelo,
                             "Aerolínea": aerolinea,
                             "Aeronave": modelo_avion,
                             "Matrícula": matricula_avion,
                             "Origen": origen,
                             "Destino": target_apt,
-                            "Viento (km/h)": viento,
-                            "Alerta": icono
+                            "Riesgo": icono
                         })
         except:
             pass
             
     if datos_llegadas:
-        df_arr = pd.DataFrame(datos_llegadas).sort_values(by="Hora (UTC)")
+        df_arr = pd.DataFrame(datos_llegadas).sort_values(by="Programado (Z)")
         st.dataframe(df_arr, use_container_width=True)
     else:
         st.info("No hay llegadas programadas que coincidan con los filtros en este rango de horas.")
@@ -515,9 +520,11 @@ with tab3:
     datos_salidas = []
     for vuelo in salidas:
         try:
-            timestamp = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('departure')
-            if timestamp:
-                hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
+            timestamp_sched = vuelo.get('flight', {}).get('time', {}).get('scheduled', {}).get('departure')
+            timestamp_est = vuelo.get('flight', {}).get('time', {}).get('estimated', {}).get('departure') or vuelo.get('flight', {}).get('time', {}).get('real', {}).get('departure')
+            
+            if timestamp_sched:
+                hora_vuelo = datetime.fromtimestamp(timestamp_sched, timezone.utc)
                 if hora_actual <= hora_vuelo <= limite_tiempo:
                     
                     target_apt = vuelo.get('target_apt')
@@ -536,22 +543,26 @@ with tab3:
                     pasa_filtro_vuelo = (not filtro_vuelos) or (num_vuelo in filtro_vuelos)
                     
                     if prob in filtros_activos and pasa_filtro_al and pasa_filtro_apt and pasa_filtro_vuelo:
+                        
+                        hora_prog_str = hora_vuelo.strftime('%H:%M')
+                        hora_est_str = datetime.fromtimestamp(timestamp_est, timezone.utc).strftime('%H:%M') if timestamp_est else "N/A"
+                        
                         datos_salidas.append({
-                            "Hora (UTC)": hora_vuelo.strftime('%H:%M'),
+                            "Programado (Z)": hora_prog_str,
+                            "Estimado (Z)": hora_est_str,
                             "Vuelo": num_vuelo,
                             "Aerolínea": aerolinea,
                             "Aeronave": modelo_avion,
                             "Matrícula": matricula_avion,
                             "Origen": target_apt,
                             "Destino": destino,
-                            "Viento (km/h)": viento,
-                            "Alerta": icono
+                            "Riesgo": icono
                         })
         except:
             pass
             
     if datos_salidas:
-        df_dep = pd.DataFrame(datos_salidas).sort_values(by="Hora (UTC)")
+        df_dep = pd.DataFrame(datos_salidas).sort_values(by="Programado (Z)")
         st.dataframe(df_dep, use_container_width=True)
     else:
         st.info("No hay salidas programadas que coincidan con los filtros en este rango de horas.")
