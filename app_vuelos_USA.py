@@ -5,7 +5,7 @@ from streamlit_folium import st_folium
 import requests
 import math
 import concurrent.futures
-import time  # <-- NUEVO: Necesario para regular la descarga de fotos
+import time  # Necesario para regular la descarga de fotos
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 import altair as alt
@@ -50,20 +50,21 @@ def cargar_modelo_ia():
 
 MODELO_IA = cargar_modelo_ia()
 
-# --- BASE DE DATOS DE AEROPUERTOS ---
+# --- BASE DE DATOS DE AEROPUERTOS (DOMINIO EXCLUSIVO) ---
 AEROPUERTOS = {
     "ATL": {"nombre": "Atlanta Hartsfield-Jackson", "coords": [33.6407, -84.4277]},
     "ORD": {"nombre": "Chicago O'Hare", "coords": [41.9742, -87.9073]},
     "LAX": {"nombre": "Los Angeles International", "coords": [33.9416, -118.4085]},
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
+AEROPUERTOS_VALIDOS = list(AEROPUERTOS.keys())
 
 # --- BARRA LATERAL (SIDEBAR) ---
 st.sidebar.title("⚙️ Configuración")
 
 aeropuerto_destino = st.sidebar.selectbox(
     "📍 Selecciona el Aeropuerto",
-    ["TODOS", "ATL", "ORD", "LAX", "JFK"],
+    ["TODOS"] + AEROPUERTOS_VALIDOS,
     index=0
 )
 
@@ -84,8 +85,8 @@ if st.sidebar.button("🔄 Refrescar Datos Ahora"):
     st.rerun()
 
 if aeropuerto_destino == "TODOS":
-    lista_iatas = list(AEROPUERTOS.keys())
-    nombre_mostrar = "Estados Unidos (Global)"
+    lista_iatas = AEROPUERTOS_VALIDOS
+    nombre_mostrar = "Estados Unidos (Hubs Principales)"
 else:
     lista_iatas = [aeropuerto_destino]
     nombre_mostrar = AEROPUERTOS[aeropuerto_destino]["nombre"]
@@ -167,7 +168,7 @@ def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     elif prob < 0.60: return texto_prob, "MEDIA", "orange", "🟡 Media", c_dest['viento_kts'], c_dest['precip']
     else: return texto_prob, "ALTA", "red", "🔴 Alta", c_dest['viento_kts'], c_dest['precip']
 
-# --- ACTUALIZADO: RADAR DE LLUVIA DINÁMICO ---
+# --- RADAR DE LLUVIA DINÁMICO ---
 @st.cache_data(ttl=300)
 def obtener_url_radar_lluvia():
     try:
@@ -189,12 +190,12 @@ def obtener_metar_taf(iata):
         return metar_txt, taf_txt
     except: return "Error de conexión", "Error de conexión"
 
-# --- ACTUALIZADO: DESCARGA DE FOTOS BLINDADA (ANTISPAM) ---
+# --- DESCARGA DE FOTOS BLINDADA (ANTISPAM) ---
 @st.cache_data(ttl=86400)
 def obtener_foto_aeronave_ia(matricula):
     if not matricula or matricula == "N/A": return None, None, None
     try:
-        time.sleep(0.3)  # Pausa estratégica para simular tráfico humano y no ser bloqueados
+        time.sleep(0.3)
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
         
@@ -282,18 +283,24 @@ def obtener_datos_vuelos(iatas):
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('📡 Sincronizando telemetría, IA y descargando imágenes de forma segura...'):
+with st.spinner('📡 Sincronizando telemetría estricta de la red (ATL, ORD, LAX, JFK)...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
-# --- FILTROS LATERALES DINÁMICOS ---
+# --- FILTROS LATERALES DINÁMICOS Y LIMPIEZA ESTRICTA DOMÉSTICA ---
 st.sidebar.divider()
 st.sidebar.markdown("### 🔎 Filtros Avanzados")
 aerolineas_disponibles, aeropuertos_disponibles, numeros_vuelo_disponibles = set(), set(), set()
 
+# Recopilar filtros solo de vuelos que cumplen la regla estricta (origen y destino en la red de 4)
 for v in llegadas + salidas:
     f_data = v.get('flight') or {}
     orig = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
     dest = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
+    
+    # REGLA DE EXCLUSIVIDAD: Solo vuelos entre nuestros 4 aeropuertos
+    if orig not in AEROPUERTOS_VALIDOS or dest not in AEROPUERTOS_VALIDOS:
+        continue
+
     num = obtener_num_vuelo_seguro(vuelo_dict=v)
     al = obtener_aerolinea_segura(vuelo_dict=v)
     
@@ -304,6 +311,11 @@ for v in llegadas + salidas:
 
 for v in vuelos_aire_crudo:
     dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
+    orig = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
+    
+    if orig not in AEROPUERTOS_VALIDOS or dest not in AEROPUERTOS_VALIDOS:
+        continue
+        
     if dest in lista_iatas:
         callsign = getattr(v, 'callsign', 'N/A')
         al_name = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
@@ -318,6 +330,11 @@ vuelos_aire_filtrados = []
 for v in vuelos_aire_crudo:
     destino = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
     origen = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
+    
+    # REGLA DE EXCLUSIVIDAD PARA EL RADAR
+    if origen not in AEROPUERTOS_VALIDOS or destino not in AEROPUERTOS_VALIDOS:
+        continue
+        
     callsign = getattr(v, 'callsign', 'N/A')
     aerolinea_vuelo = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
     
@@ -341,12 +358,16 @@ limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
-st.markdown(f"**Powered by AI Predictions** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
+st.markdown(f"**Powered by AI Predictions (Strict Domestic Mode)** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Vuelos en Radar", len(vuelos_aire_filtrados), "Acercándose a bases")
-col2.metric("Llegadas Prog.", len(llegadas), "Límite: 100/Aeropuerto")
-col3.metric("Salidas Prog.", len(salidas), "Límite: 100/Aeropuerto")
+# Recalculamos totales exactos para los KPIs
+llegadas_validas = sum(1 for v in llegadas if obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('origin')) in AEROPUERTOS_VALIDOS and obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('destination')) in AEROPUERTOS_VALIDOS)
+salidas_validas = sum(1 for v in salidas if obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('origin')) in AEROPUERTOS_VALIDOS and obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('destination')) in AEROPUERTOS_VALIDOS)
+
+col2.metric("Llegadas Prog.", llegadas_validas, "Red Estricta 4 Hubs")
+col3.metric("Salidas Prog.", salidas_validas, "Red Estricta 4 Hubs")
 
 if aeropuerto_destino == "TODOS":
     col4.metric("Bases Monitorizadas", len(lista_iatas), "Red Completa")
@@ -360,7 +381,8 @@ st.divider()
 tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar en Vivo", "🛬 Panel de Llegadas", "🛫 Panel de Salidas", "📊 Dashboard Analítico"])
 
 with tab1:
-    map_center = [39.5, -98.35] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
+    # Centrado modificado para ver bien los 4 aeropuertos en EE.UU.
+    map_center = [39.8283, -98.5795] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 5, tiles="CartoDB dark_matter")
     
     url_lluvia = obtener_url_radar_lluvia()
@@ -474,20 +496,25 @@ with tab1:
 
     folium.LayerControl().add_to(mapa)
     st_folium(mapa, width=1200, height=600, returned_objects=[])
-    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo.")
+    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo operando en rutas validadas.")
 
 with tab2:
     datos_llegadas = []
     for vuelo in llegadas:
+        f_data = vuelo.get('flight') or {}
+        origen = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
+        target = vuelo.get('target_apt')
+        
+        # REGLA DE EXCLUSIVIDAD
+        if origen not in AEROPUERTOS_VALIDOS or target not in AEROPUERTOS_VALIDOS:
+            continue
+
         timestamp_sched = obtener_timestamp_seguro(vuelo, 'arrival', 'scheduled')
         timestamp_est = obtener_timestamp_seguro(vuelo, 'arrival', 'estimated') or obtener_timestamp_seguro(vuelo, 'arrival', 'real')
         
         if timestamp_sched:
             hora_vuelo = datetime.fromtimestamp(timestamp_sched, timezone.utc)
             if hora_actual <= hora_vuelo <= limite_tiempo:
-                target = vuelo.get('target_apt')
-                f_data = vuelo.get('flight') or {}
-                origen = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
                 aerolinea = obtener_aerolinea_segura(vuelo)
                 carrier_iata = obtener_carrier_iata_seguro(vuelo)
                 num_vuelo = obtener_num_vuelo_seguro(vuelo)
@@ -511,19 +538,25 @@ with tab2:
                         "Origen": origen, "Destino": target, "Probabilidad IA": score_texto, "Nivel Alerta": icono
                     })
     if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True)
+    else: st.info("No hay llegadas programadas en rutas estrictas para esta franja horaria.")
 
 with tab3:
     datos_salidas = []
     for vuelo in salidas:
+        f_data = vuelo.get('flight') or {}
+        destino = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
+        target = vuelo.get('target_apt')
+        
+        # REGLA DE EXCLUSIVIDAD
+        if target not in AEROPUERTOS_VALIDOS or destino not in AEROPUERTOS_VALIDOS:
+            continue
+
         timestamp_sched = obtener_timestamp_seguro(vuelo, 'departure', 'scheduled')
         timestamp_est = obtener_timestamp_seguro(vuelo, 'departure', 'estimated') or obtener_timestamp_seguro(vuelo, 'departure', 'real')
         
         if timestamp_sched:
             hora_vuelo = datetime.fromtimestamp(timestamp_sched, timezone.utc)
             if hora_actual <= hora_vuelo <= limite_tiempo:
-                target = vuelo.get('target_apt')
-                f_data = vuelo.get('flight') or {}
-                destino = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
                 aerolinea = obtener_aerolinea_segura(vuelo)
                 carrier_iata = obtener_carrier_iata_seguro(vuelo)
                 num_vuelo = obtener_num_vuelo_seguro(vuelo)
@@ -547,6 +580,7 @@ with tab3:
                         "Origen": target, "Destino": destino, "Probabilidad IA": score_texto, "Nivel Alerta": icono
                     })
     if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True)
+    else: st.info("No hay salidas programadas en rutas estrictas para esta franja horaria.")
 
 with tab4:
     if aeropuerto_destino == "TODOS":
@@ -592,6 +626,13 @@ with tab4:
                 todas_operaciones = []
                 
                 for v in llegadas + salidas:
+                    f_data = v.get('flight') or {}
+                    orig = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
+                    dest = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
+                    
+                    if orig not in AEROPUERTOS_VALIDOS or dest not in AEROPUERTOS_VALIDOS:
+                        continue
+
                     if v.get('target_apt') == aeropuerto_destino:
                         tipo = "Llegada" if v in llegadas else "Salida"
                         timestamp = obtener_timestamp_seguro(v, 'arrival' if tipo == "Llegada" else 'departure', 'scheduled')
@@ -626,6 +667,13 @@ with tab4:
             conteo_horas_dict = {h: 0 for h in horas_continuas}
             
             for v in llegadas + salidas:
+                f_data = v.get('flight') or {}
+                orig = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
+                dest = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
+                
+                if orig not in AEROPUERTOS_VALIDOS or dest not in AEROPUERTOS_VALIDOS:
+                    continue
+
                 if v.get('target_apt') == aeropuerto_destino:
                     tipo = "Llegada" if v in llegadas else "Salida"
                     timestamp = obtener_timestamp_seguro(v, 'arrival' if tipo == "Llegada" else 'departure', 'scheduled')
