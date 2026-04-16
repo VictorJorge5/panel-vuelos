@@ -42,7 +42,6 @@ def cargar_todo_desde_s3():
             aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
             region_name=st.secrets["AWS_DEFAULT_REGION"]
         )
-        # El archivo que genera tu Lambda de Inferencia
         response = s3_client.get_object(
             Bucket=st.secrets["BUCKET_NAME"], 
             Key='predictions/latest_results.json'
@@ -52,18 +51,17 @@ def cargar_todo_desde_s3():
     except Exception as e:
         return {"error": str(e)}
 
-# --- BLOQUE DE CARGA CRÍTICA (CON SPINNER) ---
+# --- BLOQUE DE CARGA CRÍTICA ---
 with st.spinner('📡 Sincronizando telemetría y predicciones IA desde AWS Cloud...'):
     data_s3 = cargar_todo_desde_s3()
 
 if data_s3 is None or "error" in data_s3:
     st.error("❌ Error de Conexión Cloud")
-    st.info("Asegúrate de que la Lambda de Inferencia ha generado el archivo 'predictions/latest_results.json' en S3.")
     if data_s3 and "error" in data_s3:
         st.code(data_s3["error"])
     st.stop()
 
-# --- MAPEADO DE DATOS DEL CLOUD ---
+# --- MAPEADO DE DATOS ---
 vuelos_aire = data_s3.get('vuelos_en_aire', [])
 llegadas_raw = data_s3.get('llegadas_programadas', [])
 salidas_raw = data_s3.get('salidas_programadas', [])
@@ -80,7 +78,7 @@ AEROPUERTOS = {
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
 
-# --- BARRA LATERAL (SIDEBAR) ---
+# --- BARRA LATERAL ---
 st.sidebar.title("⚙️ Configuración")
 aeropuerto_referencia = st.sidebar.selectbox(
     "📍 Selecciona el Aeropuerto",
@@ -107,13 +105,12 @@ hora_actual = datetime.now(timezone.utc)
 
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {aeropuerto_referencia}")
-st.success(f"✅ Datos sincronizados: {metadata.get('snapshot_id', 'Desconocido')}")
-st.caption(f"Última actualización IA: {metadata.get('procesado_ia_utc', 'N/A')}")
+st.success(f"✅ Sincronizado: {metadata.get('snapshot_id', 'Snapshot Actual')}")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Vuelos en Radar", len([v for v in vuelos_aire if v['aeropuerto_referencia'] in target_iatas]))
-col2.metric("Llegadas Prog.", len([v for v in llegadas_raw if v['target_apt'] in target_iatas]))
-col3.metric("Salidas Prog.", len([v for v in salidas_raw if v['target_apt'] in target_iatas]))
+col2.metric("Llegadas Prog.", len([v for v in llegadas_raw if v.get('target_apt') in target_iatas]))
+col3.metric("Salidas Prog.", len([v for v in salidas_raw if v.get('target_apt') in target_iatas]))
 col4.metric("Estado Cloud", "SINCRO OK")
 
 st.divider()
@@ -125,7 +122,6 @@ with tab1:
     map_center = [39.5, -98.35] if aeropuerto_referencia == "TODOS" else AEROPUERTOS[aeropuerto_referencia]["coords"]
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_referencia == "TODOS" else 6, tiles="CartoDB dark_matter")
     
-    # Marcadores de Aeropuertos y Viento
     for apt in target_iatas:
         folium.Marker(
             location=AEROPUERTOS[apt]["coords"], 
@@ -133,7 +129,6 @@ with tab1:
             icon=folium.Icon(color="black", icon="building", prefix="fa")
         ).add_to(mapa)
 
-    # Dibujar Vuelos
     vuelos_pintados = 0
     for v in vuelos_aire:
         if v['aeropuerto_referencia'] in target_iatas:
@@ -145,10 +140,9 @@ with tab1:
                 <div style='font-family: Arial; font-size: 12px; width: 220px;'>
                     <h4 style='margin-bottom: 5px; color: {pred['color']};'>✈️ {callsign}</h4>
                     <b>Ruta:</b> {v['origen']} ➔ {v['destino']}<br>
-                    <b>Altitud:</b> {v['altitud']} ft | <b>Vel:</b> {v['velocidad_nudos']} kts<br>
+                    <b>Alt:</b> {v['altitud']} ft | <b>Vel:</b> {v['velocidad_nudos']} kts<br>
                     <hr>
-                    <b>Riesgo IA:</b> <span style='color:{pred['color']}'><b>{pred['icono']} {pred['prob_texto']}</b></span><br>
-                    <b>Viento Destino:</b> {round(pred.get('viento_dest', 0))} kts
+                    <b>Riesgo IA:</b> <span style='color:{pred['color']}'><b>{pred['icono']} {pred['prob_texto']}</b></span>
                 </div>
                 """
                 folium.Marker(
@@ -158,39 +152,72 @@ with tab1:
                 ).add_to(mapa)
                 vuelos_pintados += 1
     
-    st_folium(mapa, width=1200, height=600)
-    st.info(f"Mostrando {vuelos_pintados} aeronaves detectadas en el área de influencia.")
+    st_folium(mapa, width=1200, height=550)
 
 with tab2:
     st.subheader("🛬 Próximas Llegadas")
     datos_tabla = []
     for v in llegadas_raw:
-        if v['target_apt'] in target_iatas:
+        if v.get('target_apt') in target_iatas:
             f_data = v.get('flight', {})
-            callsign = f_data.get('identification', {}).get('number', {}).get('default', 'N/A')
+            ident = f_data.get('identification', {})
+            callsign = ident.get('number', {}).get('default', 'N/A')
             pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "icono": "⚪"})
             
             datos_tabla.append({
                 "Vuelo": callsign,
                 "Origen": f_data.get('airport', {}).get('origin', {}).get('code', {}).get('iata', 'N/A'),
-                "Destino": v['target_apt'],
-                "Modelo": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A'),
-                "IA Riesgo": pred['icono'],
-                "Prob. IA": pred['prob_texto']
+                "Destino": v.get('target_apt'),
+                "IA Riesgo": pred.get('icono'),
+                "Prob. IA": pred.get('prob_texto')
             })
-    st.dataframe(pd.DataFrame(datos_tabla), use_container_width=True)
+    if datos_tabla:
+        st.dataframe(pd.DataFrame(datos_tabla), use_container_width=True)
 
 with tab3:
     st.subheader("🛫 Próximas Salidas")
     datos_tabla_sal = []
     for v in salidas_raw:
-        if v['target_apt'] in target_iatas:
+        if v.get('target_apt') in target_iatas:
             f_data = v.get('flight', {})
-            callsign = f_data.get('identification', {}).get('number', {}).get('default', 'N/A')
+            ident = f_data.get('identification', {})
+            callsign = ident.get('number', {}).get('default', 'N/A')
             pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "icono": "⚪"})
             
             datos_tabla_sal.append({
                 "Vuelo": callsign,
                 "Destino": f_data.get('airport', {}).get('destination', {}).get('code', {}).get('iata', 'N/A'),
-                "Origen": v['target_apt'],
-                "IA Riesgo": pred['icono'],
+                "Origen": v.get('target_apt'),
+                "IA Riesgo": pred.get('icono'),
+                "Prob. IA": pred.get('prob_texto')
+            })
+    if datos_tabla_sal:
+        st.dataframe(pd.DataFrame(datos_tabla_sal), use_container_width=True)
+
+with tab4:
+    if aeropuerto_referencia == "TODOS":
+        st.warning("⚠️ Selecciona un aeropuerto específico para ver el análisis meteorológico.")
+    else:
+        st.subheader(f"📊 Dashboard Meteorológico - {aeropuerto_referencia}")
+        meteo_apt = dicc_meteo.get(aeropuerto_referencia, {})
+        if meteo_apt:
+            df_meteo = pd.DataFrame.from_dict(meteo_apt, orient='index').reset_index()
+            df_meteo.columns = ['Hora', 'Viento', 'Rafagas', 'Dir', 'Vis', 'Nubes', 'Temp', 'Precip']
+            df_meteo = df_meteo.head(24)
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Evolución del Viento (kts)**")
+                st.line_chart(df_meteo.set_index('Hora')['Viento'])
+            with c2:
+                st.markdown("**Precipitaciones (mm)**")
+                st.bar_chart(df_meteo.set_index('Hora')['Precip'])
+        
+        st.divider()
+        m_t = metar_taf.get(aeropuerto_referencia, {})
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("🌐 **METAR (Tiempo Real)**")
+            st.code(m_t.get('metar', 'Sin datos'), language='text')
+        with c2:
+            st.markdown("📅 **TAF (Pronóstico)**")
+            st.code(m_t.get('taf', 'Sin datos'), language='text')
