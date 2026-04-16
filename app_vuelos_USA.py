@@ -163,7 +163,6 @@ def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     prob = MODELO_IA['modelo'].predict_proba(input_df)[0][1]
     
     texto_prob = f"{prob:.1%}"
-    # --- UMBRALES AJUSTADOS PARA EL RANDOM FOREST ---
     if prob < 0.10: return texto_prob, "BAJA", "green", "🟢 Baja", c_dest['viento_kts'], c_dest['precip']
     elif prob < 0.20: return texto_prob, "MEDIA", "orange", "🟡 Media", c_dest['viento_kts'], c_dest['precip']
     else: return texto_prob, "ALTA", "red", "🔴 Alta", c_dest['viento_kts'], c_dest['precip']
@@ -557,9 +556,10 @@ with tab4:
     if aeropuerto_destino == "TODOS":
         st.warning("⚠️ Selecciona un aeropuerto específico en la barra lateral para ver su dashboard detallado y los reportes METAR/TAF.")
     else:
-        col_dash1, col_dash2 = st.columns(2)
+        # --- FILA 1: Viento y Precipitaciones ---
+        row1_col1, row1_col2 = st.columns(2)
         
-        with col_dash1:
+        with row1_col1:
             with st.container(border=True):
                 st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
                 datos_apt = dicc_meteo_global.get(aeropuerto_destino, {})
@@ -576,6 +576,7 @@ with tab4:
                 else:
                     st.info("Sin datos meteorológicos disponibles.")
                 
+        with row1_col2:
             with st.container(border=True):
                 st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
                 if datos_apt:
@@ -591,7 +592,39 @@ with tab4:
                 else:
                     st.info("Sin pronóstico de lluvia.")
 
-        with col_dash2:
+        # --- FILA 2: Carga Operativa y Distribución de Aerolíneas ---
+        row2_col1, row2_col2 = st.columns(2)
+        
+        with row2_col1:
+            with st.container(border=True):
+                st.markdown(f"**Carga Operativa: Vuelos Programados por Hora (Próximas {horas_prediccion}h)**")
+                
+                horas_continuas = [(hora_actual + timedelta(hours=i)).strftime('%H:00') for i in range(horas_prediccion + 1)]
+                conteo_horas_dict = {h: 0 for h in horas_continuas}
+                
+                for v in llegadas + salidas:
+                    if v.get('target_apt') == aeropuerto_destino:
+                        tipo = "Llegada" if v in llegadas else "Salida"
+                        timestamp = obtener_timestamp_seguro(v, 'arrival' if tipo == "Llegada" else 'departure', 'scheduled')
+                        if timestamp:
+                            hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
+                            if hora_actual <= hora_vuelo <= limite_tiempo:
+                                hora_str = hora_vuelo.strftime('%H:00')
+                                if hora_str in conteo_horas_dict:
+                                    conteo_horas_dict[hora_str] += 1
+                                    
+                df_horas = pd.DataFrame(list(conteo_horas_dict.items()), columns=["Hora", "Vuelos"])
+                grafico_horas = alt.Chart(df_horas).mark_bar(
+                    color="#ea580c", cornerRadiusTopLeft=4, cornerRadiusTopRight=4
+                ).encode(
+                    x=alt.X("Hora", sort=None, title=None, axis=alt.Axis(grid=False)),
+                    y=alt.Y("Vuelos", title="Vuelos Programados", axis=alt.Axis(grid=True, gridColor="#e2e8f0")),
+                    tooltip=["Hora", "Vuelos"]
+                ).properties(height=300).configure_view(strokeWidth=0)
+                
+                st.altair_chart(grafico_horas, use_container_width=True)
+
+        with row2_col2:
             with st.container(border=True):
                 st.markdown(f"**Distribución de Aerolíneas (Próximas {horas_prediccion}h)**")
                 todas_operaciones = []
@@ -624,34 +657,7 @@ with tab4:
                 else:
                     st.info("No hay suficientes datos de aerolíneas en esta franja horaria.")
         
-        with st.container(border=True):
-            st.markdown(f"**Carga Operativa: Vuelos Programados por Hora (Próximas {horas_prediccion}h)**")
-            
-            horas_continuas = [(hora_actual + timedelta(hours=i)).strftime('%H:00') for i in range(horas_prediccion + 1)]
-            conteo_horas_dict = {h: 0 for h in horas_continuas}
-            
-            for v in llegadas + salidas:
-                if v.get('target_apt') == aeropuerto_destino:
-                    tipo = "Llegada" if v in llegadas else "Salida"
-                    timestamp = obtener_timestamp_seguro(v, 'arrival' if tipo == "Llegada" else 'departure', 'scheduled')
-                    if timestamp:
-                        hora_vuelo = datetime.fromtimestamp(timestamp, timezone.utc)
-                        if hora_actual <= hora_vuelo <= limite_tiempo:
-                            hora_str = hora_vuelo.strftime('%H:00')
-                            if hora_str in conteo_horas_dict:
-                                conteo_horas_dict[hora_str] += 1
-                                
-            df_horas = pd.DataFrame(list(conteo_horas_dict.items()), columns=["Hora", "Vuelos"])
-            grafico_horas = alt.Chart(df_horas).mark_bar(
-                color="#ea580c", cornerRadiusTopLeft=4, cornerRadiusTopRight=4
-            ).encode(
-                x=alt.X("Hora", sort=None, title=None, axis=alt.Axis(grid=False)),
-                y=alt.Y("Vuelos", title="Vuelos Programados", axis=alt.Axis(grid=True, gridColor="#e2e8f0")),
-                tooltip=["Hora", "Vuelos"]
-            ).properties(height=300).configure_view(strokeWidth=0)
-            
-            st.altair_chart(grafico_horas, use_container_width=True)
-        
+        # --- FILA 3: METAR y TAF ---
         st.markdown("---")
         st.markdown(f"### 📋 Reportes Aeronáuticos (METAR / TAF) - {aeropuerto_destino}")
         metar_text, taf_text = obtener_metar_taf(aeropuerto_destino)
