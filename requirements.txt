@@ -3,7 +3,7 @@ pandas
 folium
 streamlit-folium
 requests
-FlightRadar24
+FlightRadarAPI
 altair
 boto3
 beautifulsoup4
