@@ -12,15 +12,21 @@ import altair as alt
 import joblib
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️", layout="wide")
+# AÑADIDO: initial_sidebar_state="expanded" para que siempre empiece abierta
+st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
 
 # --- ESTILOS CSS PERSONALIZADOS (Diseño Limpio y Profesional - Tema Claro) ---
 st.markdown("""
     <style>
-    /* Ocultar elementos predeterminados de Streamlit */
-    header {visibility: hidden;}
+    /* Ocultar Menú y Footer, pero manteniendo la flecha de la barra lateral */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
+    
+    /* Ocultar el botón de Deploy de Streamlit específicamente */
+    .stDeployButton {display: none;}
+    
+    /* Hacer la cabecera transparente para que quede limpio pero el botón funcione */
+    header {background-color: transparent !important;}
 
     /* Optimizar espacio de la pantalla */
     .block-container {
