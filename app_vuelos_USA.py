@@ -251,19 +251,17 @@ def obtener_timestamp_seguro(vuelo_dict, tipo_vuelo, tipo_tiempo):
     except: pass
     return None
 
-# --- EXTRACCIÓN DE VUELOS (LÍMITE DE DISTANCIA ELIMINADO) ---
+# --- EXTRACCIÓN DE VUELOS (SOLO HACIA LOS HUBS) ---
 @st.cache_data(ttl=60)
 def obtener_datos_vuelos(iatas):
     fr_api = FlightRadar24API()
     vuelos_aire, llegadas, salidas = [], [], []
     try:
-        # Se recorren los vuelos del radar sin la restricción de 500 millas.
         for v in fr_api.get_flights():
             if v.ground_speed > 0:
                 dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
-                orig = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
-                # Si el avión está volando HACIA o DESDE alguno de los aeropuertos seleccionados en la barra lateral
-                if dest in iatas or orig in iatas:
+                # SOLO mostramos el avión si vuela HACIA uno de nuestros aeropuertos
+                if dest in iatas:
                     vuelos_aire.append(v)
     except: pass
 
@@ -305,8 +303,7 @@ for v in llegadas + salidas:
 
 for v in vuelos_aire_crudo:
     dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
-    orig = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
-    if dest in lista_iatas or orig in lista_iatas:
+    if dest in lista_iatas:
         callsign = getattr(v, 'callsign', 'N/A')
         al_name = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
         if callsign != "N/A": numeros_vuelo_disponibles.add(callsign)
@@ -323,8 +320,8 @@ for v in vuelos_aire_crudo:
     callsign = getattr(v, 'callsign', 'N/A')
     aerolinea_vuelo = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
     
-    # Ahora permitimos tanto si el destino COMO si el origen están en nuestra lista
-    if destino in lista_iatas or origen in lista_iatas:
+    # Filtro estricto: El destino DEBE ser uno de nuestros aeropuertos para ser evaluado
+    if destino in lista_iatas:
         if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
            (not filtro_vuelos or callsign in filtro_vuelos) and \
            (not filtro_aerolineas or aerolinea_vuelo in filtro_aerolineas):
