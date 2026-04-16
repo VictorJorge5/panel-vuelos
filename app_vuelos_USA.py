@@ -5,7 +5,7 @@ from streamlit_folium import st_folium
 import requests
 import math
 import concurrent.futures
-import time  
+import time  # <-- NUEVO: Necesario para regular la descarga de fotos
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 import altair as alt
@@ -17,7 +17,8 @@ st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️
 # --- ESTILOS CSS PERSONALIZADOS (Diseño Limpio y Profesional - Tema Claro) ---
 st.markdown("""
     <style>
-    /* Ocultar Menú y Footer, pero manteniendo la flecha de la barra lateral */
+    /* Ocultar elementos predeterminados de Streamlit */
+    header {visibility: hidden;}
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
@@ -140,10 +141,24 @@ def obtener_predicciones_globales(iatas):
 
 def extraer_clima_hora(iata, hora_dt, dicc_meteo):
     clima_ideal = {'viento_kts': 0.0, 'rafagas_kts': 0.0, 'direccion': 0.0, 'visib_m': 10000.0, 'nubes_pct': 0.0, 'temp_c': 15.0, 'precip': 0.0}
-    if iata not in dicc_meteo: return clima_ideal
-    hora_redondeada = hora_dt.replace(minute=0, second=0, microsecond=0)
-    hora_str = hora_redondeada.strftime("%Y-%m-%dT%H:00")
-    return dicc_meteo[iata].get(hora_str, clima_ideal)
+    if iata not in dicc_meteo or not dicc_meteo[iata]: return clima_ideal
+    
+    # CORRECCIÓN DE DESFASE TEMPORAL: Sincroniza la hora calculando la diferencia, saltándose el fallo del año 2026 vs 2024
+    horas_diff = int((hora_dt - hora_actual).total_seconds() / 3600)
+    if horas_diff < 0: horas_diff = 0
+    
+    claves = list(dicc_meteo[iata].keys())
+    api_date = claves[0].split('T')[0]
+    hora_act_str = f"{api_date}T{hora_actual.strftime('%H:00')}"
+    
+    try:
+        idx_act = claves.index(hora_act_str)
+        idx_obj = idx_act + horas_diff
+        if idx_obj < len(claves): 
+            return dicc_meteo[iata][claves[idx_obj]]
+    except: pass
+    
+    return clima_ideal
 
 def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     if not MODELO_IA:
@@ -168,7 +183,6 @@ def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     prob = MODELO_IA['modelo'].predict_proba(input_df)[0][1]
     
     texto_prob = f"{prob:.1%}"
-    # UMBRALES CORREGIDOS 10% Y 20%
     if prob < 0.10: return texto_prob, "BAJA", "green", "🟢 Baja", c_dest['viento_kts'], c_dest['precip']
     elif prob < 0.20: return texto_prob, "MEDIA", "orange", "🟡 Media", c_dest['viento_kts'], c_dest['precip']
     else: return texto_prob, "ALTA", "red", "🔴 Alta", c_dest['viento_kts'], c_dest['precip']
@@ -200,7 +214,7 @@ def obtener_metar_taf(iata):
 def obtener_foto_aeronave_ia(matricula):
     if not matricula or matricula == "N/A": return None, None, None
     try:
-        time.sleep(0.3) 
+        time.sleep(0.3)  # Pausa estratégica para simular tráfico humano y no ser bloqueados
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
         
@@ -283,6 +297,10 @@ def obtener_datos_vuelos(iatas):
         except: pass
     return vuelos_aire, llegadas, salidas
 
+# Definimos hora actual lo primero para que esté disponible globalmente
+hora_actual = datetime.now(timezone.utc)
+limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
+
 # --- INICIALIZACIÓN ---
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
@@ -342,9 +360,6 @@ if matriculas_mapa:
         for f in concurrent.futures.as_completed(futuros):
             dicc_fotos[futuros[f]] = f.result()
 
-hora_actual = datetime.now(timezone.utc)
-limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
-
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
 st.markdown(f"**Powered by AI Predictions** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
@@ -380,12 +395,19 @@ with tab1:
             opacity=0.55
         ).add_to(mapa)
 
-    hora_str_clave = hora_actual.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00")
-
     for apt in lista_iatas:
         folium.Marker(location=AEROPUERTOS[apt]["coords"], popup=f"<b>{AEROPUERTOS[apt]['nombre']}</b>", icon=folium.Icon(color="black", icon="building", prefix="fa")).add_to(mapa)
 
-        clima_apt = dicc_meteo_global.get(apt, {}).get(hora_str_clave, {})
+        # Sincronización a prueba de fallos para las flechas del viento
+        datos_meteo_apt = dicc_meteo_global.get(apt, {})
+        claves_apt = list(datos_meteo_apt.keys())
+        if claves_apt:
+            api_date = claves_apt[0].split('T')[0]
+            hora_str_clave = f"{api_date}T{hora_actual.strftime('%H:00')}"
+            clima_apt = datos_meteo_apt.get(hora_str_clave, {})
+        else:
+            clima_apt = {}
+            
         vel_viento = clima_apt.get('viento_kts')
         dir_viento = clima_apt.get('direccion')
         
@@ -570,8 +592,17 @@ with tab4:
                 st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
                 datos_apt = dicc_meteo_global.get(aeropuerto_destino, {})
                 if datos_apt:
-                    vientos_futuros = {k: v['viento_kts'] for k, v in datos_apt.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
-                    vientos_limitados = dict(list(vientos_futuros.items())[:24])
+                    # CORRECCIÓN DE DESFASE TEMPORAL (Garantiza gráficas aunque la API y el reloj no coincidan)
+                    claves = list(datos_apt.keys())
+                    api_date = claves[0].split('T')[0]
+                    hora_act_str = f"{api_date}T{hora_actual.strftime('%H:00')}"
+                    
+                    try:
+                        idx_act = claves.index(hora_act_str)
+                        claves_futuras = claves[idx_act:idx_act+24]
+                        vientos_limitados = {k: datos_apt[k]['viento_kts'] for k in claves_futuras}
+                    except ValueError:
+                        vientos_limitados = dict(list({k: v['viento_kts'] for k, v in datos_apt.items()}.items())[:24])
                     
                     df_clima = pd.DataFrame(
                         list(vientos_limitados.values()), 
@@ -586,8 +617,16 @@ with tab4:
             with st.container(border=True):
                 st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
                 if datos_apt:
-                    precip_futuras = {k: v['precip'] for k, v in datos_apt.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
-                    precip_limitadas = dict(list(precip_futuras.items())[:24])
+                    claves = list(datos_apt.keys())
+                    api_date = claves[0].split('T')[0]
+                    hora_act_str = f"{api_date}T{hora_actual.strftime('%H:00')}"
+                    
+                    try:
+                        idx_act = claves.index(hora_act_str)
+                        claves_futuras = claves[idx_act:idx_act+24]
+                        precip_limitadas = {k: datos_apt[k]['precip'] for k in claves_futuras}
+                    except ValueError:
+                        precip_limitadas = dict(list({k: v['precip'] for k, v in datos_apt.items()}.items())[:24])
                     
                     df_precip = pd.DataFrame(
                         list(precip_limitadas.values()), 
