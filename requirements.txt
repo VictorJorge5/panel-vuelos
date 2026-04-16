@@ -6,3 +6,7 @@ requests
 FlightRadar24
 altair
 boto3
+beautifulsoup4
+scikit-learn==1.7.2
+numpy==2.3.5
+joblib
