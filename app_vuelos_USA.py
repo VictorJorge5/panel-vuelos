@@ -5,7 +5,7 @@ from streamlit_folium import st_folium
 import requests
 import math
 import concurrent.futures
-import time  
+import time  # <-- NUEVO: Necesario para regular la descarga de fotos
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 import altair as alt
@@ -21,7 +21,8 @@ st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️
 # --- ESTILOS CSS PERSONALIZADOS (Diseño Limpio y Profesional - Tema Claro) ---
 st.markdown("""
     <style>
-    /* Ocultar Menú y Footer, pero manteniendo la flecha de la barra lateral */
+    /* Ocultar elementos predeterminados de Streamlit */
+    header {visibility: hidden;}
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
@@ -48,33 +49,38 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- CONEXIÓN CLOUD (AWS S3) ---
+# --- CONEXIÓN A AWS S3 (CÓDIGO DE EVA) ---
 try:
-    s3 = boto3.client(
+    # Inicializar cliente S3 con los secretos que ya ha puesto Víctor
+    s3_client = boto3.client(
         's3',
         aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
         aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
         region_name=st.secrets["AWS_DEFAULT_REGION"]
     )
+    BUCKET_NAME = st.secrets["BUCKET_NAME"]
     cloud_configurado = True
 except Exception:
-    s3 = None
     cloud_configurado = False
 
-@st.cache_data(ttl=60) # Descarga de S3 solo 1 vez por minuto para ahorrar costes en AWS
-def leer_predicciones_s3():
+@st.cache_data(ttl=60) # Muy importante para no saturar AWS y que la web vuele
+def cargar_datos_desde_s3():
     if not cloud_configurado: return None
     try:
-        bucket = st.secrets["BUCKET_NAME"]
-        key = "predictions/latest_results.json"
-        response = s3.get_object(Bucket=bucket, Key=key)
-        data = response['Body'].read().decode('utf-8')
-        return json.loads(data)
+        # 'predictions/latest_results.json' debe ser el nombre exacto que usa tu Lambda
+        response = s3_client.get_object(Bucket=BUCKET_NAME, Key='predictions/latest_results.json')
+        content = response['Body'].read().decode('utf-8')
+        return json.loads(content)
     except Exception as e:
-        # Falla silenciosamente y usa el modelo local si el bucket no está listo
+        # Silenciamos el error visual temporalmente para que la app no colapse si el bucket está vacío
+        # st.error(f"Error al conectar con S3: {e}")
         return None
 
-# --- CARGA DEL MODELO IA LOCAL (Backup) ---
+# Cargar los datos una sola vez por refresco
+datos_tfm = cargar_datos_desde_s3()
+
+
+# --- CARGA DEL MODELO IA LOCAL ---
 @st.cache_resource
 def cargar_modelo_ia():
     try:
@@ -172,7 +178,7 @@ def extraer_clima_hora(iata, hora_dt, dicc_meteo):
     clima_ideal = {'viento_kts': 0.0, 'rafagas_kts': 0.0, 'direccion': 0.0, 'visib_m': 10000.0, 'nubes_pct': 0.0, 'temp_c': 15.0, 'precip': 0.0}
     if iata not in dicc_meteo or not dicc_meteo[iata]: return clima_ideal
     
-    # CORRECCIÓN DE DESFASE TEMPORAL
+    # CORRECCIÓN DE DESFASE TEMPORAL: Sincroniza la hora calculando la diferencia, saltándose el fallo del año 2026 vs 2024
     horas_diff = int((hora_dt - hora_actual).total_seconds() / 3600)
     if horas_diff < 0: horas_diff = 0
     
@@ -243,7 +249,7 @@ def obtener_metar_taf(iata):
 def obtener_foto_aeronave_ia(matricula):
     if not matricula or matricula == "N/A": return None, None, None
     try:
-        time.sleep(0.3) 
+        time.sleep(0.3)  # Pausa estratégica para simular tráfico humano y no ser bloqueados
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
         
@@ -335,9 +341,6 @@ mapa_aerolineas = obtener_mapa_aerolineas()
 
 with st.spinner('📡 Sincronizando telemetría, IA (Local/Cloud) y descargando imágenes de forma segura...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
-    
-# Obtenemos predicciones cloud silenciosamente
-predicciones_cloud = leer_predicciones_s3()
 
 # --- FILTROS LATERALES DINÁMICOS ---
 st.sidebar.divider()
@@ -393,10 +396,9 @@ if matriculas_mapa:
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
 
-# AVISO DE CLOUD (Aportación de Eva)
-if predicciones_cloud:
+if datos_tfm:
     st.success("✅ Datos de predicción sincronizados con AWS S3 en tiempo real")
-    
+
 st.markdown(f"**Powered by AI Predictions** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
 
 col1, col2, col3, col4 = st.columns(4)
@@ -620,12 +622,13 @@ with tab4:
                 st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
                 datos_apt = dicc_meteo_global.get(aeropuerto_destino, {})
                 if datos_apt:
-                    # BYPASS TEMPORAL: Extraemos la hora sin comparar el año
-                    vientos_limitados = dict(list({k: v['viento_kts'] for k, v in datos_apt.items()}.items())[:24])
+                    # Restaurado EXACTAMENTE a la lógica original solicitada
+                    vientos_futuros = {k: v['viento_kts'] for k, v in datos_apt.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
+                    vientos_limitados = dict(list(vientos_futuros.items())[:24])
                     
                     df_clima = pd.DataFrame(
                         list(vientos_limitados.values()), 
-                        index=[k.split('T')[1] for k in vientos_limitados.keys()],
+                        index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in vientos_limitados.keys()],
                         columns=["Viento (kts)"]
                     )
                     st.line_chart(df_clima, color="#2563eb")
@@ -636,12 +639,13 @@ with tab4:
             with st.container(border=True):
                 st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
                 if datos_apt:
-                    # BYPASS TEMPORAL: Extraemos la hora sin comparar el año
-                    precip_limitadas = dict(list({k: v['precip'] for k, v in datos_apt.items()}.items())[:24])
+                    # Restaurado EXACTAMENTE a la lógica original solicitada
+                    precip_futuras = {k: v['precip'] for k, v in datos_apt.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
+                    precip_limitadas = dict(list(precip_futuras.items())[:24])
                     
                     df_precip = pd.DataFrame(
                         list(precip_limitadas.values()), 
-                        index=[k.split('T')[1] for k in precip_limitadas.keys()],
+                        index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in precip_limitadas.keys()],
                         columns=["Lluvia (mm)"]
                     )
                     st.bar_chart(df_precip, color="#2563eb")
