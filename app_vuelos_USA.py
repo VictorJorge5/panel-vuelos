@@ -356,8 +356,9 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric("Vuelos Hub-to-Hub (Mapa)", len(vuelos_aire_filtrados), "Volando actualmente")
 
 # Recalculamos llegadas y salidas de la tabla para los KPIs
-llegadas_tabla = sum(1 for v in llegadas if obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('origin')) in AEROPUERTOS_VALIDOS and vuelo.get('target_apt') in AEROPUERTOS_VALIDOS and obtener_timestamp_seguro(v, 'arrival', 'scheduled') and datetime.fromtimestamp(obtener_timestamp_seguro(v, 'arrival', 'scheduled'), timezone.utc) >= hora_actual)
-salidas_tabla = sum(1 for v in salidas if obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('destination')) in AEROPUERTOS_VALIDOS and vuelo.get('target_apt') in AEROPUERTOS_VALIDOS and obtener_timestamp_seguro(v, 'departure', 'scheduled') and datetime.fromtimestamp(obtener_timestamp_seguro(v, 'departure', 'scheduled'), timezone.utc) >= hora_actual)
+# Recalculamos llegadas y salidas de la tabla para los KPIs
+llegadas_tabla = sum(1 for v in llegadas if obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('origin')) in AEROPUERTOS_VALIDOS and v.get('target_apt') in AEROPUERTOS_VALIDOS and obtener_timestamp_seguro(v, 'arrival', 'scheduled') and datetime.fromtimestamp(obtener_timestamp_seguro(v, 'arrival', 'scheduled'), timezone.utc) >= hora_actual)
+salidas_tabla = sum(1 for v in salidas if obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('destination')) in AEROPUERTOS_VALIDOS and v.get('target_apt') in AEROPUERTOS_VALIDOS and obtener_timestamp_seguro(v, 'departure', 'scheduled') and datetime.fromtimestamp(obtener_timestamp_seguro(v, 'departure', 'scheduled'), timezone.utc) >= hora_actual)
 
 col2.metric("Llegadas Programadas", llegadas_tabla, "Histórico Ampliado")
 col3.metric("Salidas Programadas", salidas_tabla, "Histórico Ampliado")
