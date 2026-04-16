@@ -251,19 +251,19 @@ def obtener_timestamp_seguro(vuelo_dict, tipo_vuelo, tipo_tiempo):
     except: pass
     return None
 
-# --- EXTRACCIÓN DE VUELOS ---
+# --- EXTRACCIÓN DE VUELOS (LÍMITE DE DISTANCIA ELIMINADO) ---
 @st.cache_data(ttl=60)
 def obtener_datos_vuelos(iatas):
     fr_api = FlightRadar24API()
     vuelos_aire, llegadas, salidas = [], [], []
     try:
+        # Se recorren los vuelos del radar sin la restricción de 500 millas.
         for v in fr_api.get_flights():
             if v.ground_speed > 0:
-               for apt in iatas:
-                   dist = calcular_distancia_nm(v.latitude, v.longitude, AEROPUERTOS[apt]["coords"][0], AEROPUERTOS[apt]["coords"][1])
-                   if dist < 500:
-                      vuelos_aire.append(v)
-                      break
+                dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
+                # Si el avión está volando a alguno de los aeropuertos seleccionados en la barra lateral
+                if dest in iatas:
+                    vuelos_aire.append(v)
     except: pass
 
     for apt in iatas:
@@ -344,7 +344,7 @@ st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
 st.markdown(f"**Powered by AI Predictions** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Vuelos en Radar", len(vuelos_aire_filtrados), "Acercándose a bases")
+col1.metric("Vuelos en Radar", len(vuelos_aire_filtrados), "Volando hacia destinos")
 col2.metric("Llegadas Prog.", len(llegadas), "Límite: 100/Aeropuerto")
 col3.metric("Salidas Prog.", len(salidas), "Límite: 100/Aeropuerto")
 
