@@ -3,9 +3,6 @@ pandas
 folium
 streamlit-folium
 requests
-FlightRadarAPI
-beautifulsoup4
-scikit-learn==1.7.2
-numpy==2.3.5
-joblib
+FlightRadar24
 altair
+boto3
