@@ -5,11 +5,15 @@ from streamlit_folium import st_folium
 import requests
 import math
 import concurrent.futures
-import time  # <-- NUEVO: Necesario para regular la descarga de fotos
+import time  
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 import altair as alt
 import joblib
+
+# --- NUEVAS LIBRERÍAS CLOUD (Aportación de Eva) ---
+import boto3
+import json
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
@@ -17,8 +21,7 @@ st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️
 # --- ESTILOS CSS PERSONALIZADOS (Diseño Limpio y Profesional - Tema Claro) ---
 st.markdown("""
     <style>
-    /* Ocultar elementos predeterminados de Streamlit */
-    header {visibility: hidden;}
+    /* Ocultar Menú y Footer, pero manteniendo la flecha de la barra lateral */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
@@ -45,7 +48,33 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- CARGA DEL MODELO IA ---
+# --- CONEXIÓN CLOUD (AWS S3) ---
+try:
+    s3 = boto3.client(
+        's3',
+        aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
+        aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
+        region_name=st.secrets["AWS_DEFAULT_REGION"]
+    )
+    cloud_configurado = True
+except Exception:
+    s3 = None
+    cloud_configurado = False
+
+@st.cache_data(ttl=60) # Descarga de S3 solo 1 vez por minuto para ahorrar costes en AWS
+def leer_predicciones_s3():
+    if not cloud_configurado: return None
+    try:
+        bucket = st.secrets["BUCKET_NAME"]
+        key = "predictions/latest_results.json"
+        response = s3.get_object(Bucket=bucket, Key=key)
+        data = response['Body'].read().decode('utf-8')
+        return json.loads(data)
+    except Exception as e:
+        # Falla silenciosamente y usa el modelo local si el bucket no está listo
+        return None
+
+# --- CARGA DEL MODELO IA LOCAL (Backup) ---
 @st.cache_resource
 def cargar_modelo_ia():
     try:
@@ -143,7 +172,7 @@ def extraer_clima_hora(iata, hora_dt, dicc_meteo):
     clima_ideal = {'viento_kts': 0.0, 'rafagas_kts': 0.0, 'direccion': 0.0, 'visib_m': 10000.0, 'nubes_pct': 0.0, 'temp_c': 15.0, 'precip': 0.0}
     if iata not in dicc_meteo or not dicc_meteo[iata]: return clima_ideal
     
-    # CORRECCIÓN DE DESFASE TEMPORAL: Sincroniza la hora calculando la diferencia, saltándose el fallo del año 2026 vs 2024
+    # CORRECCIÓN DE DESFASE TEMPORAL
     horas_diff = int((hora_dt - hora_actual).total_seconds() / 3600)
     if horas_diff < 0: horas_diff = 0
     
@@ -214,7 +243,7 @@ def obtener_metar_taf(iata):
 def obtener_foto_aeronave_ia(matricula):
     if not matricula or matricula == "N/A": return None, None, None
     try:
-        time.sleep(0.3)  # Pausa estratégica para simular tráfico humano y no ser bloqueados
+        time.sleep(0.3) 
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
         
@@ -280,7 +309,6 @@ def obtener_datos_vuelos(iatas):
         for v in fr_api.get_flights():
             if v.ground_speed > 0:
                 dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
-                # SOLO mostramos el avión si vuela HACIA uno de nuestros aeropuertos
                 if dest in iatas:
                     vuelos_aire.append(v)
     except: pass
@@ -301,12 +329,15 @@ def obtener_datos_vuelos(iatas):
 hora_actual = datetime.now(timezone.utc)
 limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
-# --- INICIALIZACIÓN ---
+# --- INICIALIZACIÓN DE DATOS ---
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('📡 Sincronizando telemetría, IA y descargando imágenes de forma segura...'):
+with st.spinner('📡 Sincronizando telemetría, IA (Local/Cloud) y descargando imágenes de forma segura...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
+    
+# Obtenemos predicciones cloud silenciosamente
+predicciones_cloud = leer_predicciones_s3()
 
 # --- FILTROS LATERALES DINÁMICOS ---
 st.sidebar.divider()
@@ -344,7 +375,6 @@ for v in vuelos_aire_crudo:
     callsign = getattr(v, 'callsign', 'N/A')
     aerolinea_vuelo = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
     
-    # Filtro estricto: El destino DEBE ser uno de nuestros aeropuertos para ser evaluado
     if destino in lista_iatas:
         if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
            (not filtro_vuelos or callsign in filtro_vuelos) and \
@@ -362,6 +392,11 @@ if matriculas_mapa:
 
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
+
+# AVISO DE CLOUD (Aportación de Eva)
+if predicciones_cloud:
+    st.success("✅ Datos de predicción sincronizados con AWS S3 en tiempo real")
+    
 st.markdown(f"**Powered by AI Predictions** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
 
 col1, col2, col3, col4 = st.columns(4)
@@ -395,19 +430,12 @@ with tab1:
             opacity=0.55
         ).add_to(mapa)
 
+    hora_str_clave = hora_actual.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00")
+
     for apt in lista_iatas:
         folium.Marker(location=AEROPUERTOS[apt]["coords"], popup=f"<b>{AEROPUERTOS[apt]['nombre']}</b>", icon=folium.Icon(color="black", icon="building", prefix="fa")).add_to(mapa)
 
-        # Sincronización a prueba de fallos para las flechas del viento
-        datos_meteo_apt = dicc_meteo_global.get(apt, {})
-        claves_apt = list(datos_meteo_apt.keys())
-        if claves_apt:
-            api_date = claves_apt[0].split('T')[0]
-            hora_str_clave = f"{api_date}T{hora_actual.strftime('%H:00')}"
-            clima_apt = datos_meteo_apt.get(hora_str_clave, {})
-        else:
-            clima_apt = {}
-            
+        clima_apt = dicc_meteo_global.get(apt, {}).get(hora_str_clave, {})
         vel_viento = clima_apt.get('viento_kts')
         dir_viento = clima_apt.get('direccion')
         
@@ -592,21 +620,12 @@ with tab4:
                 st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
                 datos_apt = dicc_meteo_global.get(aeropuerto_destino, {})
                 if datos_apt:
-                    # CORRECCIÓN DE DESFASE TEMPORAL (Garantiza gráficas aunque la API y el reloj no coincidan)
-                    claves = list(datos_apt.keys())
-                    api_date = claves[0].split('T')[0]
-                    hora_act_str = f"{api_date}T{hora_actual.strftime('%H:00')}"
-                    
-                    try:
-                        idx_act = claves.index(hora_act_str)
-                        claves_futuras = claves[idx_act:idx_act+24]
-                        vientos_limitados = {k: datos_apt[k]['viento_kts'] for k in claves_futuras}
-                    except ValueError:
-                        vientos_limitados = dict(list({k: v['viento_kts'] for k, v in datos_apt.items()}.items())[:24])
+                    # BYPASS TEMPORAL: Extraemos la hora sin comparar el año
+                    vientos_limitados = dict(list({k: v['viento_kts'] for k, v in datos_apt.items()}.items())[:24])
                     
                     df_clima = pd.DataFrame(
                         list(vientos_limitados.values()), 
-                        index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in vientos_limitados.keys()],
+                        index=[k.split('T')[1] for k in vientos_limitados.keys()],
                         columns=["Viento (kts)"]
                     )
                     st.line_chart(df_clima, color="#2563eb")
@@ -617,20 +636,12 @@ with tab4:
             with st.container(border=True):
                 st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
                 if datos_apt:
-                    claves = list(datos_apt.keys())
-                    api_date = claves[0].split('T')[0]
-                    hora_act_str = f"{api_date}T{hora_actual.strftime('%H:00')}"
-                    
-                    try:
-                        idx_act = claves.index(hora_act_str)
-                        claves_futuras = claves[idx_act:idx_act+24]
-                        precip_limitadas = {k: datos_apt[k]['precip'] for k in claves_futuras}
-                    except ValueError:
-                        precip_limitadas = dict(list({k: v['precip'] for k, v in datos_apt.items()}.items())[:24])
+                    # BYPASS TEMPORAL: Extraemos la hora sin comparar el año
+                    precip_limitadas = dict(list({k: v['precip'] for k, v in datos_apt.items()}.items())[:24])
                     
                     df_precip = pd.DataFrame(
                         list(precip_limitadas.values()), 
-                        index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in precip_limitadas.keys()],
+                        index=[k.split('T')[1] for k in precip_limitadas.keys()],
                         columns=["Lluvia (mm)"]
                     )
                     st.bar_chart(df_precip, color="#2563eb")
