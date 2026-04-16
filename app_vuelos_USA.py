@@ -163,8 +163,8 @@ def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     prob = MODELO_IA['modelo'].predict_proba(input_df)[0][1]
     
     texto_prob = f"{prob:.1%}"
-    if prob < 0.25: return texto_prob, "BAJA", "green", "🟢 Baja", c_dest['viento_kts'], c_dest['precip']
-    elif prob < 0.60: return texto_prob, "MEDIA", "orange", "🟡 Media", c_dest['viento_kts'], c_dest['precip']
+    if prob < 0.10: return texto_prob, "BAJA", "green", "🟢 Baja", c_dest['viento_kts'], c_dest['precip']
+    elif prob < 0.20: return texto_prob, "MEDIA", "orange", "🟡 Media", c_dest['viento_kts'], c_dest['precip']
     else: return texto_prob, "ALTA", "red", "🔴 Alta", c_dest['viento_kts'], c_dest['precip']
 
 # --- ACTUALIZADO: RADAR DE LLUVIA DINÁMICO ---
