@@ -5,14 +5,13 @@ from streamlit_folium import st_folium
 import requests
 import math
 import concurrent.futures
-import time  # <-- NUEVO: Necesario para regular la descarga de fotos
+import time  
 from datetime import datetime, timedelta, timezone
 from FlightRadar24 import FlightRadar24API
 import altair as alt
 import joblib
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-# AÑADIDO: initial_sidebar_state="expanded" para que siempre empiece abierta
 st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
 
 # --- ESTILOS CSS PERSONALIZADOS (Diseño Limpio y Profesional - Tema Claro) ---
@@ -169,11 +168,12 @@ def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     prob = MODELO_IA['modelo'].predict_proba(input_df)[0][1]
     
     texto_prob = f"{prob:.1%}"
+    # UMBRALES CORREGIDOS 10% Y 20%
     if prob < 0.10: return texto_prob, "BAJA", "green", "🟢 Baja", c_dest['viento_kts'], c_dest['precip']
     elif prob < 0.20: return texto_prob, "MEDIA", "orange", "🟡 Media", c_dest['viento_kts'], c_dest['precip']
     else: return texto_prob, "ALTA", "red", "🔴 Alta", c_dest['viento_kts'], c_dest['precip']
 
-# --- ACTUALIZADO: RADAR DE LLUVIA DINÁMICO ---
+# --- RADAR DE LLUVIA DINÁMICO ---
 @st.cache_data(ttl=300)
 def obtener_url_radar_lluvia():
     try:
@@ -195,12 +195,12 @@ def obtener_metar_taf(iata):
         return metar_txt, taf_txt
     except: return "Error de conexión", "Error de conexión"
 
-# --- ACTUALIZADO: DESCARGA DE FOTOS BLINDADA (ANTISPAM) ---
+# --- DESCARGA DE FOTOS BLINDADA (ANTISPAM) ---
 @st.cache_data(ttl=86400)
 def obtener_foto_aeronave_ia(matricula):
     if not matricula or matricula == "N/A": return None, None, None
     try:
-        time.sleep(0.3)  # Pausa estratégica para simular tráfico humano y no ser bloqueados
+        time.sleep(0.3) 
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
         
@@ -570,18 +570,15 @@ with tab4:
                 st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
                 datos_apt = dicc_meteo_global.get(aeropuerto_destino, {})
                 if datos_apt:
-                    # NUEVA LÓGICA: Convertimos las horas de la API a datetime para hacer un filtrado matemático exacto
-                    vientos_limitados = {}
-                    for h_str, h_data in datos_apt.items():
-                        h_dt = datetime.strptime(h_str, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
-                        if hora_actual.replace(minute=0, second=0, microsecond=0) <= h_dt <= hora_actual + timedelta(hours=24):
-                            vientos_limitados[h_dt.strftime("%H:%M")] = h_data['viento_kts']
+                    vientos_futuros = {k: v['viento_kts'] for k, v in datos_apt.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
+                    vientos_limitados = dict(list(vientos_futuros.items())[:24])
                     
-                    if vientos_limitados:
-                        df_clima = pd.DataFrame(list(vientos_limitados.values()), index=list(vientos_limitados.keys()), columns=["Viento (kts)"])
-                        st.line_chart(df_clima, color="#2563eb")
-                    else:
-                        st.info("Sin datos meteorológicos disponibles en el rango.")
+                    df_clima = pd.DataFrame(
+                        list(vientos_limitados.values()), 
+                        index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in vientos_limitados.keys()],
+                        columns=["Viento (kts)"]
+                    )
+                    st.line_chart(df_clima, color="#2563eb")
                 else:
                     st.info("Sin datos meteorológicos disponibles.")
                 
@@ -589,18 +586,15 @@ with tab4:
             with st.container(border=True):
                 st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
                 if datos_apt:
-                    # NUEVA LÓGICA
-                    precip_limitadas = {}
-                    for h_str, h_data in datos_apt.items():
-                        h_dt = datetime.strptime(h_str, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
-                        if hora_actual.replace(minute=0, second=0, microsecond=0) <= h_dt <= hora_actual + timedelta(hours=24):
-                            precip_limitadas[h_dt.strftime("%H:%M")] = h_data['precip']
-                            
-                    if precip_limitadas:
-                        df_precip = pd.DataFrame(list(precip_limitadas.values()), index=list(precip_limitadas.keys()), columns=["Lluvia (mm)"])
-                        st.bar_chart(df_precip, color="#2563eb")
-                    else:
-                        st.info("Sin pronóstico de lluvia en el rango.")
+                    precip_futuras = {k: v['precip'] for k, v in datos_apt.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
+                    precip_limitadas = dict(list(precip_futuras.items())[:24])
+                    
+                    df_precip = pd.DataFrame(
+                        list(precip_limitadas.values()), 
+                        index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in precip_limitadas.keys()],
+                        columns=["Lluvia (mm)"]
+                    )
+                    st.bar_chart(df_precip, color="#2563eb")
                 else:
                     st.info("Sin pronóstico de lluvia.")
 
