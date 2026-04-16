@@ -207,7 +207,7 @@ def limpiar_duplicados(lista_vuelos):
         except: unicos.append(v)
     return unicos
 
-# --- EXTRACCIÓN CON CRUCE DE DATOS (DATA IMPUTATION) ---
+# --- EXTRACCIÓN MASIVA DE DATOS ---
 @st.cache_data(ttl=60)
 def obtener_datos_vuelos(iatas_seleccionados):
     fr_api = FlightRadar24API()
@@ -215,9 +215,9 @@ def obtener_datos_vuelos(iatas_seleccionados):
     vuelos_validos_callsigns = set()
     rutas_validas = {}
 
-    # 1. Extraer paneles masivamente (hasta 3 páginas por aeropuerto)
+    # 1. BUCEO PROFUNDO EN LA API: 6 páginas (aprox. 600 vuelos por aeropuerto analizados)
     for apt in iatas_seleccionados:
-        for page in range(1, 4):
+        for page in range(1, 7):
             try:
                 detalles = fr_api.get_airport_details(apt, page=page)
                 arr = detalles['airport']['pluginData']['schedule']['arrivals']['data']
@@ -260,7 +260,7 @@ def obtener_datos_vuelos(iatas_seleccionados):
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('📡 Realizando cruce de telemetría ADS-B para revelar vuelos Hub-to-Hub...'):
+with st.spinner('📡 Extrayendo operativa completa (6 páginas de profundidad por Hub)...'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
 # --- FILTROS ---
@@ -318,12 +318,12 @@ st.markdown(f"**Powered by AI Predictions** | ⏱️ Hora (UTC): `{hora_actual.s
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Vuelos Hub-to-Hub", len(vuelos_aire_filtrados), "Volando ahora")
 
-# SOLUCIÓN DE BUG DE NOMBRES
-llegadas_tabla = sum(1 for v in llegadas if obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('origin')) in AEROPUERTOS_VALIDOS and v.get('target_apt') in AEROPUERTOS_VALIDOS and obtener_timestamp_seguro(v, 'arrival', 'scheduled') and datetime.fromtimestamp(obtener_timestamp_seguro(v, 'arrival', 'scheduled'), timezone.utc) >= hora_actual)
-salidas_tabla = sum(1 for v in salidas if obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('destination')) in AEROPUERTOS_VALIDOS and v.get('target_apt') in AEROPUERTOS_VALIDOS and obtener_timestamp_seguro(v, 'departure', 'scheduled') and datetime.fromtimestamp(obtener_timestamp_seguro(v, 'departure', 'scheduled'), timezone.utc) >= hora_actual)
+# KPIs ARREGLADOS: Muestran el número real de registros que la API nos ha dado para la red.
+llegadas_tabla = sum(1 for v in llegadas if obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('origin')) in AEROPUERTOS_VALIDOS and v.get('target_apt') in AEROPUERTOS_VALIDOS)
+salidas_tabla = sum(1 for v in salidas if obtener_iata_seguro(v.get('flight', {}).get('airport', {}).get('destination')) in AEROPUERTOS_VALIDOS and v.get('target_apt') in AEROPUERTOS_VALIDOS)
 
-col2.metric("Llegadas Prog.", llegadas_tabla, "Histórico Ampliado")
-col3.metric("Salidas Prog.", salidas_tabla, "Histórico Ampliado")
+col2.metric("Llegadas Operativas", llegadas_tabla, "Red Estricta")
+col3.metric("Salidas Operativas", salidas_tabla, "Red Estricta")
 
 if aeropuerto_destino == "TODOS": col4.metric("Bases Monitorizadas", len(lista_iatas), "Red Completa")
 else:
@@ -379,18 +379,18 @@ with tab2:
         t_sched = obtener_timestamp_seguro(v, 'arrival', 'scheduled')
         if t_sched:
             h_vuelo = datetime.fromtimestamp(t_sched, timezone.utc)
-            if h_vuelo >= hora_actual:
-                al = obtener_aerolinea_segura(v)
-                num = obtener_num_vuelo_seguro(v)
-                score, prob, _, icono, _, _ = predecir_riesgo_ia(orig, target, obtener_carrier_iata_seguro(v), h_vuelo, dicc_meteo_global)
-                
-                if prob in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and (not filtro_aeropuertos or orig in filtro_aeropuertos or target in filtro_aeropuertos) and (not filtro_vuelos or num in filtro_vuelos):
-                    t_est = obtener_timestamp_seguro(v, 'arrival', 'estimated') or obtener_timestamp_seguro(v, 'arrival', 'real')
-                    datos_llegadas.append({
-                        "Prog (Z)": h_vuelo.strftime('%Y-%m-%d %H:%M'), "Est (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
-                        "Vuelo": num, "Aerolínea": al, "Eq": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A'),
-                        "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A'), "Orig": orig, "Dest": target, "Riesgo IA": score, "Alerta": icono
-                    })
+            # HEMOS QUITADO EL FILTRO TEMPORAL PARA MOSTRAR TODA LA OPERATIVA EXTRAÍDA
+            al = obtener_aerolinea_segura(v)
+            num = obtener_num_vuelo_seguro(v)
+            score, prob, _, icono, _, _ = predecir_riesgo_ia(orig, target, obtener_carrier_iata_seguro(v), h_vuelo, dicc_meteo_global)
+            
+            if prob in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and (not filtro_aeropuertos or orig in filtro_aeropuertos or target in filtro_aeropuertos) and (not filtro_vuelos or num in filtro_vuelos):
+                t_est = obtener_timestamp_seguro(v, 'arrival', 'estimated') or obtener_timestamp_seguro(v, 'arrival', 'real')
+                datos_llegadas.append({
+                    "Prog (Z)": h_vuelo.strftime('%Y-%m-%d %H:%M'), "Est (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
+                    "Vuelo": num, "Aerolínea": al, "Eq": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A'),
+                    "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A'), "Orig": orig, "Dest": target, "Riesgo IA": score, "Alerta": icono
+                })
     if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Prog (Z)"), use_container_width=True)
     else: st.info("No hay llegadas programadas.")
 
@@ -405,18 +405,18 @@ with tab3:
         t_sched = obtener_timestamp_seguro(v, 'departure', 'scheduled')
         if t_sched:
             h_vuelo = datetime.fromtimestamp(t_sched, timezone.utc)
-            if h_vuelo >= hora_actual:
-                al = obtener_aerolinea_segura(v)
-                num = obtener_num_vuelo_seguro(v)
-                score, prob, _, icono, _, _ = predecir_riesgo_ia(target, dest, obtener_carrier_iata_seguro(v), h_vuelo, dicc_meteo_global)
-                
-                if prob in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and (not filtro_aeropuertos or target in filtro_aeropuertos or dest in filtro_aeropuertos) and (not filtro_vuelos or num in filtro_vuelos):
-                    t_est = obtener_timestamp_seguro(v, 'departure', 'estimated') or obtener_timestamp_seguro(v, 'departure', 'real')
-                    datos_salidas.append({
-                        "Prog (Z)": h_vuelo.strftime('%Y-%m-%d %H:%M'), "Est (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
-                        "Vuelo": num, "Aerolínea": al, "Eq": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A'),
-                        "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A'), "Orig": target, "Dest": dest, "Riesgo IA": score, "Alerta": icono
-                    })
+            # HEMOS QUITADO EL FILTRO TEMPORAL PARA MOSTRAR TODA LA OPERATIVA EXTRAÍDA
+            al = obtener_aerolinea_segura(v)
+            num = obtener_num_vuelo_seguro(v)
+            score, prob, _, icono, _, _ = predecir_riesgo_ia(target, dest, obtener_carrier_iata_seguro(v), h_vuelo, dicc_meteo_global)
+            
+            if prob in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and (not filtro_aeropuertos or target in filtro_aeropuertos or dest in filtro_aeropuertos) and (not filtro_vuelos or num in filtro_vuelos):
+                t_est = obtener_timestamp_seguro(v, 'departure', 'estimated') or obtener_timestamp_seguro(v, 'departure', 'real')
+                datos_salidas.append({
+                    "Prog (Z)": h_vuelo.strftime('%Y-%m-%d %H:%M'), "Est (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
+                    "Vuelo": num, "Aerolínea": al, "Eq": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A'),
+                    "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A'), "Orig": target, "Dest": dest, "Riesgo IA": score, "Alerta": icono
+                })
     if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Prog (Z)"), use_container_width=True)
     else: st.info("No hay salidas programadas.")
 
