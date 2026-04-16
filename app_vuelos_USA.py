@@ -261,8 +261,9 @@ def obtener_datos_vuelos(iatas):
         for v in fr_api.get_flights():
             if v.ground_speed > 0:
                 dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
-                # Si el avión está volando a alguno de los aeropuertos seleccionados en la barra lateral
-                if dest in iatas:
+                orig = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
+                # Si el avión está volando HACIA o DESDE alguno de los aeropuertos seleccionados en la barra lateral
+                if dest in iatas or orig in iatas:
                     vuelos_aire.append(v)
     except: pass
 
@@ -304,7 +305,8 @@ for v in llegadas + salidas:
 
 for v in vuelos_aire_crudo:
     dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
-    if dest in lista_iatas:
+    orig = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
+    if dest in lista_iatas or orig in lista_iatas:
         callsign = getattr(v, 'callsign', 'N/A')
         al_name = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
         if callsign != "N/A": numeros_vuelo_disponibles.add(callsign)
@@ -321,7 +323,8 @@ for v in vuelos_aire_crudo:
     callsign = getattr(v, 'callsign', 'N/A')
     aerolinea_vuelo = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
     
-    if destino in lista_iatas:
+    # Ahora permitimos tanto si el destino COMO si el origen están en nuestra lista
+    if destino in lista_iatas or origen in lista_iatas:
         if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
            (not filtro_vuelos or callsign in filtro_vuelos) and \
            (not filtro_aerolineas or aerolinea_vuelo in filtro_aerolineas):
@@ -411,7 +414,11 @@ with tab1:
         v_speed_str = f"+{v_speed}" if v_speed > 0 else str(v_speed)
         v_speed_color = "green" if v_speed > 0 else "red" if v_speed < 0 else "gray"
         
-        horas_restantes = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(vuelo.ground_speed, 1)
+        if destino in AEROPUERTOS:
+            horas_restantes = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(vuelo.ground_speed, 1)
+        else:
+            horas_restantes = 0
+            
         eta = hora_actual + timedelta(hours=horas_restantes)
         
         # --- LLAMADA AL MODELO IA ---
