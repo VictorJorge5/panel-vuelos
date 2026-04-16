@@ -164,8 +164,9 @@ def predecir_riesgo_ia(origen, destino, aerolinea, hora_vuelo_dt, dicc_meteo):
     prob = MODELO_IA['modelo'].predict_proba(input_df)[0][1]
     
     texto_prob = f"{prob:.1%}"
-    if prob < 0.25: return texto_prob, "BAJA", "green", "🟢 Baja", c_dest['viento_kts'], c_dest['precip']
-    elif prob < 0.60: return texto_prob, "MEDIA", "orange", "🟡 Media", c_dest['viento_kts'], c_dest['precip']
+    # Ajustado a los umbrales de tu Random Forest
+    if prob < 0.10: return texto_prob, "BAJA", "green", "🟢 Baja", c_dest['viento_kts'], c_dest['precip']
+    elif prob < 0.20: return texto_prob, "MEDIA", "orange", "🟡 Media", c_dest['viento_kts'], c_dest['precip']
     else: return texto_prob, "ALTA", "red", "🔴 Alta", c_dest['viento_kts'], c_dest['precip']
 
 # --- RADAR DE LLUVIA DINÁMICO ---
@@ -252,22 +253,27 @@ def obtener_timestamp_seguro(vuelo_dict, tipo_vuelo, tipo_tiempo):
     except: pass
     return None
 
-# --- EXTRACCIÓN DE VUELOS ---
+# --- EXTRACCIÓN DE VUELOS (SOLUCIONADO EL MAPA Y PANELES) ---
 @st.cache_data(ttl=60)
-def obtener_datos_vuelos(iatas):
+def obtener_datos_vuelos(iatas_seleccionados):
     fr_api = FlightRadar24API()
     vuelos_aire, llegadas, salidas = [], [], []
+    
+    # 1. MAPA: Capturar TODOS los vuelos en el aire que conecten los 4 hubs (sin importar dónde estén volando ahora)
     try:
         for v in fr_api.get_flights():
-            if v.ground_speed > 0:
-               for apt in iatas:
-                   dist = calcular_distancia_nm(v.latitude, v.longitude, AEROPUERTOS[apt]["coords"][0], AEROPUERTOS[apt]["coords"][1])
-                   if dist < 500:
-                      vuelos_aire.append(v)
-                      break
+            orig = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
+            dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
+            
+            # MAGIA DEL MAPA: Ambos extremos deben estar en nuestros 4 aeropuertos
+            if orig in AEROPUERTOS_VALIDOS and dest in AEROPUERTOS_VALIDOS:
+                # Además, tiene que estar relacionado con lo que el usuario haya seleccionado en la barra lateral
+                if orig in iatas_seleccionados or dest in iatas_seleccionados:
+                    vuelos_aire.append(v)
     except: pass
 
-    for apt in iatas:
+    # 2. PANELES: Cargar al máximo (aprox 100 por cada aeropuerto = 400 total)
+    for apt in iatas_seleccionados:
         try:
             detalles = fr_api.get_airport_details(apt)
             arr = detalles['airport']['pluginData']['schedule']['arrivals']['data']
@@ -277,50 +283,40 @@ def obtener_datos_vuelos(iatas):
             llegadas.extend(arr)
             salidas.extend(dep)
         except: pass
+        
     return vuelos_aire, llegadas, salidas
 
 # --- INICIALIZACIÓN ---
 dicc_meteo_global = obtener_predicciones_globales(lista_iatas)
 mapa_aerolineas = obtener_mapa_aerolineas()
 
-with st.spinner('📡 Sincronizando telemetría estricta de la red (ATL, ORD, LAX, JFK)...'):
+with st.spinner('📡 Sincronizando telemetría... Mapeando vuelos Hub-to-Hub y cargando paneles operativos.'):
     vuelos_aire_crudo, llegadas, salidas = obtener_datos_vuelos(lista_iatas)
 
-# --- FILTROS LATERALES DINÁMICOS Y LIMPIEZA ESTRICTA DOMÉSTICA ---
+# --- FILTROS LATERALES DINÁMICOS ---
 st.sidebar.divider()
 st.sidebar.markdown("### 🔎 Filtros Avanzados")
 aerolineas_disponibles, aeropuertos_disponibles, numeros_vuelo_disponibles = set(), set(), set()
 
-# Recopilar filtros solo de vuelos que cumplen la regla estricta (origen y destino en la red de 4)
-for v in llegadas + salidas:
-    f_data = v.get('flight') or {}
-    orig = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
-    dest = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
-    
-    # REGLA DE EXCLUSIVIDAD: Solo vuelos entre nuestros 4 aeropuertos
-    if orig not in AEROPUERTOS_VALIDOS or dest not in AEROPUERTOS_VALIDOS:
-        continue
+# Llenamos los filtros con toda la masa de datos
+for v in llegadas + salidas + vuelos_aire_crudo:
+    f_data = v.get('flight') if isinstance(v, dict) else {}
+    if isinstance(v, dict):
+        orig = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
+        dest = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
+        num = obtener_num_vuelo_seguro(vuelo_dict=v)
+        al = obtener_aerolinea_segura(vuelo_dict=v)
+    else:
+        orig = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
+        dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
+        num = getattr(v, 'callsign', 'N/A')
+        al = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
+        v.nombre_aerolinea_mapeado = al
 
-    num = obtener_num_vuelo_seguro(vuelo_dict=v)
-    al = obtener_aerolinea_segura(vuelo_dict=v)
-    
     if al != "N/A": aerolineas_disponibles.add(al)
     if orig != "N/A": aeropuertos_disponibles.add(orig)
     if dest != "N/A": aeropuertos_disponibles.add(dest)
     if num != "N/A": numeros_vuelo_disponibles.add(num)
-
-for v in vuelos_aire_crudo:
-    dest = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
-    orig = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
-    
-    if orig not in AEROPUERTOS_VALIDOS or dest not in AEROPUERTOS_VALIDOS:
-        continue
-        
-    if dest in lista_iatas:
-        callsign = getattr(v, 'callsign', 'N/A')
-        al_name = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
-        if callsign != "N/A": numeros_vuelo_disponibles.add(callsign)
-        if al_name != "N/A": aerolineas_disponibles.add(al_name)
 
 filtro_aerolineas = st.sidebar.multiselect("✈️ Filtrar por Aerolínea", sorted([str(x) for x in aerolineas_disponibles]))
 filtro_aeropuertos = st.sidebar.multiselect("📍 Filtrar por Aeropuerto", sorted([str(x) for x in aeropuertos_disponibles]))
@@ -330,20 +326,13 @@ vuelos_aire_filtrados = []
 for v in vuelos_aire_crudo:
     destino = str(getattr(v, 'destination_airport_iata', 'N/A')).upper()
     origen = str(getattr(v, 'origin_airport_iata', 'N/A')).upper()
-    
-    # REGLA DE EXCLUSIVIDAD PARA EL RADAR
-    if origen not in AEROPUERTOS_VALIDOS or destino not in AEROPUERTOS_VALIDOS:
-        continue
-        
     callsign = getattr(v, 'callsign', 'N/A')
-    aerolinea_vuelo = mapa_aerolineas.get(getattr(v, 'airline_icao', 'N/A'), "N/A")
+    aerolinea_vuelo = getattr(v, 'nombre_aerolinea_mapeado', 'N/A')
     
-    if destino in lista_iatas:
-        if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
-           (not filtro_vuelos or callsign in filtro_vuelos) and \
-           (not filtro_aerolineas or aerolinea_vuelo in filtro_aerolineas):
-            v.nombre_aerolinea_mapeado = aerolinea_vuelo
-            vuelos_aire_filtrados.append(v)
+    if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
+       (not filtro_vuelos or callsign in filtro_vuelos) and \
+       (not filtro_aerolineas or aerolinea_vuelo in filtro_aerolineas):
+        vuelos_aire_filtrados.append(v)
 
 matriculas_mapa = list(set([getattr(v, 'registration', 'N/A') for v in vuelos_aire_filtrados if getattr(v, 'registration', 'N/A') != 'N/A']))
 dicc_fotos = {}
@@ -358,16 +347,12 @@ limite_tiempo = hora_actual + timedelta(hours=horas_prediccion)
 
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
-st.markdown(f"**Powered by AI Predictions (Strict Domestic Mode)** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
+st.markdown(f"**Powered by AI Predictions** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
 
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Vuelos en Radar", len(vuelos_aire_filtrados), "Acercándose a bases")
-# Recalculamos totales exactos para los KPIs
-llegadas_validas = sum(1 for v in llegadas if obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('origin')) in AEROPUERTOS_VALIDOS and obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('destination')) in AEROPUERTOS_VALIDOS)
-salidas_validas = sum(1 for v in salidas if obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('origin')) in AEROPUERTOS_VALIDOS and obtener_iata_seguro((v.get('flight') or {}).get('airport', {}).get('destination')) in AEROPUERTOS_VALIDOS)
-
-col2.metric("Llegadas Prog.", llegadas_validas, "Red Estricta 4 Hubs")
-col3.metric("Salidas Prog.", salidas_validas, "Red Estricta 4 Hubs")
+col1.metric("Vuelos Hub-to-Hub (Mapa)", len(vuelos_aire_filtrados), "Volando actualmente")
+col2.metric("Llegadas Programadas", len(llegadas), "En paneles")
+col3.metric("Salidas Programadas", len(salidas), "En paneles")
 
 if aeropuerto_destino == "TODOS":
     col4.metric("Bases Monitorizadas", len(lista_iatas), "Red Completa")
@@ -378,10 +363,9 @@ else:
 st.divider()
 
 # --- PESTAÑAS ---
-tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar en Vivo", "🛬 Panel de Llegadas", "🛫 Panel de Salidas", "📊 Dashboard Analítico"])
+tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar en Vivo (Hubs)", "🛬 Panel de Llegadas (Total)", "🛫 Panel de Salidas (Total)", "📊 Dashboard Analítico"])
 
 with tab1:
-    # Centrado modificado para ver bien los 4 aeropuertos en EE.UU.
     map_center = [39.8283, -98.5795] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 5, tiles="CartoDB dark_matter")
     
@@ -433,10 +417,11 @@ with tab1:
         v_speed_str = f"+{v_speed}" if v_speed > 0 else str(v_speed)
         v_speed_color = "green" if v_speed > 0 else "red" if v_speed < 0 else "gray"
         
-        horas_restantes = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(vuelo.ground_speed, 1)
+        horas_restantes = 0
+        if destino in AEROPUERTOS:
+            horas_restantes = calcular_distancia_nm(vuelo.latitude, vuelo.longitude, AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(vuelo.ground_speed, 1)
         eta = hora_actual + timedelta(hours=horas_restantes)
         
-        # --- LLAMADA AL MODELO IA ---
         score_texto, prob, color, icono, viento_dest, lluvia_dest = predecir_riesgo_ia(origen, destino, aerolinea_iata, eta, dicc_meteo_global)
         
         if prob in filtros_activos:
@@ -496,7 +481,7 @@ with tab1:
 
     folium.LayerControl().add_to(mapa)
     st_folium(mapa, width=1200, height=600, returned_objects=[])
-    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones con telemetría en vivo operando en rutas validadas.")
+    st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones en vivo cubriendo rutas estrictas Hub-to-Hub.")
 
 with tab2:
     datos_llegadas = []
@@ -505,10 +490,6 @@ with tab2:
         origen = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
         target = vuelo.get('target_apt')
         
-        # REGLA DE EXCLUSIVIDAD
-        if origen not in AEROPUERTOS_VALIDOS or target not in AEROPUERTOS_VALIDOS:
-            continue
-
         timestamp_sched = obtener_timestamp_seguro(vuelo, 'arrival', 'scheduled')
         timestamp_est = obtener_timestamp_seguro(vuelo, 'arrival', 'estimated') or obtener_timestamp_seguro(vuelo, 'arrival', 'real')
         
@@ -538,7 +519,7 @@ with tab2:
                         "Origen": origen, "Destino": target, "Probabilidad IA": score_texto, "Nivel Alerta": icono
                     })
     if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True)
-    else: st.info("No hay llegadas programadas en rutas estrictas para esta franja horaria.")
+    else: st.info("No hay llegadas programadas para esta franja horaria.")
 
 with tab3:
     datos_salidas = []
@@ -546,10 +527,6 @@ with tab3:
         f_data = vuelo.get('flight') or {}
         destino = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
         target = vuelo.get('target_apt')
-        
-        # REGLA DE EXCLUSIVIDAD
-        if target not in AEROPUERTOS_VALIDOS or destino not in AEROPUERTOS_VALIDOS:
-            continue
 
         timestamp_sched = obtener_timestamp_seguro(vuelo, 'departure', 'scheduled')
         timestamp_est = obtener_timestamp_seguro(vuelo, 'departure', 'estimated') or obtener_timestamp_seguro(vuelo, 'departure', 'real')
@@ -580,7 +557,7 @@ with tab3:
                         "Origen": target, "Destino": destino, "Probabilidad IA": score_texto, "Nivel Alerta": icono
                     })
     if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True)
-    else: st.info("No hay salidas programadas en rutas estrictas para esta franja horaria.")
+    else: st.info("No hay salidas programadas para esta franja horaria.")
 
 with tab4:
     if aeropuerto_destino == "TODOS":
@@ -626,13 +603,6 @@ with tab4:
                 todas_operaciones = []
                 
                 for v in llegadas + salidas:
-                    f_data = v.get('flight') or {}
-                    orig = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
-                    dest = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
-                    
-                    if orig not in AEROPUERTOS_VALIDOS or dest not in AEROPUERTOS_VALIDOS:
-                        continue
-
                     if v.get('target_apt') == aeropuerto_destino:
                         tipo = "Llegada" if v in llegadas else "Salida"
                         timestamp = obtener_timestamp_seguro(v, 'arrival' if tipo == "Llegada" else 'departure', 'scheduled')
@@ -667,13 +637,6 @@ with tab4:
             conteo_horas_dict = {h: 0 for h in horas_continuas}
             
             for v in llegadas + salidas:
-                f_data = v.get('flight') or {}
-                orig = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
-                dest = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
-                
-                if orig not in AEROPUERTOS_VALIDOS or dest not in AEROPUERTOS_VALIDOS:
-                    continue
-
                 if v.get('target_apt') == aeropuerto_destino:
                     tipo = "Llegada" if v in llegadas else "Salida"
                     timestamp = obtener_timestamp_seguro(v, 'arrival' if tipo == "Llegada" else 'departure', 'scheduled')
