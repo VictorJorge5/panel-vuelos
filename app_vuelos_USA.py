@@ -570,15 +570,18 @@ with tab4:
                 st.markdown(f"**Evolución del Viento (Próximas 24h) - {aeropuerto_destino}**")
                 datos_apt = dicc_meteo_global.get(aeropuerto_destino, {})
                 if datos_apt:
-                    vientos_futuros = {k: v['viento_kts'] for k, v in datos_apt.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
-                    vientos_limitados = dict(list(vientos_futuros.items())[:24])
+                    # NUEVA LÓGICA: Convertimos las horas de la API a datetime para hacer un filtrado matemático exacto
+                    vientos_limitados = {}
+                    for h_str, h_data in datos_apt.items():
+                        h_dt = datetime.strptime(h_str, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
+                        if hora_actual.replace(minute=0, second=0, microsecond=0) <= h_dt <= hora_actual + timedelta(hours=24):
+                            vientos_limitados[h_dt.strftime("%H:%M")] = h_data['viento_kts']
                     
-                    df_clima = pd.DataFrame(
-                        list(vientos_limitados.values()), 
-                        index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in vientos_limitados.keys()],
-                        columns=["Viento (kts)"]
-                    )
-                    st.line_chart(df_clima, color="#2563eb")
+                    if vientos_limitados:
+                        df_clima = pd.DataFrame(list(vientos_limitados.values()), index=list(vientos_limitados.keys()), columns=["Viento (kts)"])
+                        st.line_chart(df_clima, color="#2563eb")
+                    else:
+                        st.info("Sin datos meteorológicos disponibles en el rango.")
                 else:
                     st.info("Sin datos meteorológicos disponibles.")
                 
@@ -586,15 +589,18 @@ with tab4:
             with st.container(border=True):
                 st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
                 if datos_apt:
-                    precip_futuras = {k: v['precip'] for k, v in datos_apt.items() if k >= hora_actual.strftime("%Y-%m-%dT%H:00")}
-                    precip_limitadas = dict(list(precip_futuras.items())[:24])
-                    
-                    df_precip = pd.DataFrame(
-                        list(precip_limitadas.values()), 
-                        index=[datetime.strptime(k, "%Y-%m-%dT%H:%M").strftime("%H:%M") for k in precip_limitadas.keys()],
-                        columns=["Lluvia (mm)"]
-                    )
-                    st.bar_chart(df_precip, color="#2563eb")
+                    # NUEVA LÓGICA
+                    precip_limitadas = {}
+                    for h_str, h_data in datos_apt.items():
+                        h_dt = datetime.strptime(h_str, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
+                        if hora_actual.replace(minute=0, second=0, microsecond=0) <= h_dt <= hora_actual + timedelta(hours=24):
+                            precip_limitadas[h_dt.strftime("%H:%M")] = h_data['precip']
+                            
+                    if precip_limitadas:
+                        df_precip = pd.DataFrame(list(precip_limitadas.values()), index=list(precip_limitadas.keys()), columns=["Lluvia (mm)"])
+                        st.bar_chart(df_precip, color="#2563eb")
+                    else:
+                        st.info("Sin pronóstico de lluvia en el rango.")
                 else:
                     st.info("Sin pronóstico de lluvia.")
 
