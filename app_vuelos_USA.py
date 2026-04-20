@@ -63,6 +63,7 @@ vuelos_aire = data_s3.get('vuelos_en_aire', [])
 llegadas_raw = data_s3.get('llegadas_programadas', [])
 salidas_raw = data_s3.get('salidas_programadas', [])
 dicc_meteo = data_s3.get('meteo_detallada', {})
+# Diccionario con el Riesgo ya procesado por AWS
 predicciones_ia = {str(k).strip().upper(): v for k, v in data_s3.get('predicciones_ia', {}).items()}
 metar_taf = data_s3.get('metar_taf', {})
 metadata = data_s3.get('metadata', {})
@@ -105,6 +106,7 @@ def obtener_foto_aeronave_ia(matricula):
     except Exception: pass
     return None, None, None
 
+# --- EXTRACCIÓN SEGURA DESDE LOS JSON ANIDADOS DE LLEGADAS/SALIDAS ---
 def obtener_iata_seguro(nodo):
     try: return nodo['code'].get('iata', 'N/A') if isinstance(nodo, dict) and isinstance(nodo.get('code'), dict) else 'N/A'
     except: return 'N/A'
@@ -215,12 +217,12 @@ col3.metric("Salidas Prog.", len([v for v in salidas_raw if v.get('target_apt') 
 if aeropuerto_destino == "TODOS":
     col4.metric("Bases Monitorizadas", len(target_iatas), "Red Completa")
 else:
-    # Extracción segura de la meteo actual desde el JSON
     viento_kts, rafagas = 0, 0
     meteo_apt = dicc_meteo.get(aeropuerto_destino, {})
     if meteo_apt:
         hora_act_str = hora_actual.replace(minute=0, second=0, microsecond=0).strftime('%Y-%m-%dT%H:00')
         clima_ahora = meteo_apt.get(hora_act_str)
+        # El JSON puede mandar listas o diccionarios/números crudos
         if clima_ahora and isinstance(clima_ahora, list) and len(clima_ahora) >= 2:
             viento_kts, rafagas = clima_ahora[0], clima_ahora[1]
         elif clima_ahora and isinstance(clima_ahora, (int, float)):
@@ -281,6 +283,8 @@ with tab1:
             viento_dest, lluvia_dest = 0, 0
             if meteo_dest and isinstance(meteo_dest, list) and len(meteo_dest) >= 7:
                 viento_dest, lluvia_dest = meteo_dest[0], meteo_dest[6]
+            elif meteo_dest and isinstance(meteo_dest, (int, float)):
+                viento_dest = meteo_dest
             
             foto_url, foto_link, fotografo = dicc_fotos.get(matricula, (None, None, None))
             if foto_url:
@@ -337,8 +341,8 @@ with tab2:
                         t_est = obtener_timestamp_seguro(v, 'arrival', 'estimated') or obtener_timestamp_seguro(v, 'arrival', 'real')
                         datos_llegadas.append({
                             "Programado (Z)": h_vuelo.strftime('%H:%M'), "Estimado (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
-                            "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A'),
-                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A'), "Origen": orig, "Destino": target, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto')}", "Nivel Alerta": pred['icono']
+                            "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
+                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": orig, "Destino": target, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
     if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True)
 
@@ -365,8 +369,8 @@ with tab3:
                         t_est = obtener_timestamp_seguro(v, 'departure', 'estimated') or obtener_timestamp_seguro(v, 'departure', 'real')
                         datos_salidas.append({
                             "Programado (Z)": h_vuelo.strftime('%H:%M'), "Estimado (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
-                            "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A'),
-                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A'), "Origen": target, "Destino": dest, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto')}", "Nivel Alerta": pred['icono']
+                            "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
+                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": target, "Destino": dest, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
     if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True)
 
@@ -386,7 +390,7 @@ with tab4:
                     for h in horas_continuas:
                         val = datos_apt.get(h)
                         if val:
-                            vientos_limitados[h.split('T')[1]] = val[0] if isinstance(val, list) else val.get('viento_kts', 0)
+                            vientos_limitados[h.split('T')[1]] = val[0] if isinstance(val, list) else val
                     
                     if vientos_limitados:
                         df_clima = pd.DataFrame(list(vientos_limitados.values()), index=list(vientos_limitados.keys()), columns=["Viento (kts)"])
@@ -400,8 +404,8 @@ with tab4:
                     lluvia_limitada = {}
                     for h in horas_continuas:
                         val = datos_apt.get(h)
-                        if val:
-                            lluvia_limitada[h.split('T')[1]] = val[6] if isinstance(val, list) else val.get('precip', 0)
+                        if val and isinstance(val, list) and len(val) >= 7:
+                            lluvia_limitada[h.split('T')[1]] = val[6] 
                     
                     if lluvia_limitada:
                         df_precip = pd.DataFrame(list(lluvia_limitada.values()), index=list(lluvia_limitada.keys()), columns=["Lluvia (mm)"])
