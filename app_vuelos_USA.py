@@ -63,6 +63,9 @@ vuelos_aire = data_s3.get('vuelos_en_aire', [])
 llegadas_raw = data_s3.get('llegadas_programadas', [])
 salidas_raw = data_s3.get('salidas_programadas', [])
 dicc_meteo = data_s3.get('meteo_detallada', {})
+# Diccionario con el Riesgo ya procesado por AWS
+predicciones_ia = {str(k).strip().upper(): v for k, v in data_s3.get('predicciones_ia', {}).items()}
+metar_taf = data_s3.get('metar_taf', {})
 metadata = data_s3.get('metadata', {})
 
 hora_actual = datetime.now(timezone.utc)
@@ -270,21 +273,10 @@ with tab1:
         horas_restantes = calcular_distancia_nm(vuelo.get('latitud', 0), vuelo.get('longitud', 0), AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(velocidad if isinstance(velocidad, (int, float)) else 1, 1) if destino in AEROPUERTOS else 0
         eta = hora_actual + timedelta(hours=horas_restantes)
         
-        # OBTENEMOS LA IA DIRECTAMENTE DE LOS DATOS DE VUELO EN S3
-        prob_str = vuelo.get('probabilidad_retraso', '0%')
-        try:
-            prob_num = float(prob_str.replace('%', '')) / 100
-        except:
-            prob_num = 0.0
-
-        if prob_num < 0.10:
-            alerta, color, icono = "BAJA", "green", "🟢"
-        elif prob_num < 0.20:
-            alerta, color, icono = "MEDIA", "orange", "🟡"
-        else:
-            alerta, color, icono = "ALTA", "red", "🔴"
+        # OBTENEMOS LA IA DIRECTAMENTE DE S3
+        pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "alerta": "BAJA", "color": "gray", "icono": "⚪"})
         
-        if alerta in filtros_activos:
+        if pred['alerta'] in filtros_activos:
             # Obtener datos de viento/lluvia destino para el popup
             hora_eta_str = eta.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00")
             meteo_dest = dicc_meteo.get(destino, {}).get(hora_eta_str)
@@ -303,14 +295,14 @@ with tab1:
             html_popup = f"""
             <div style='font-family: Arial; font-size: 12px; width: 250px;'>
                 {foto_html}
-                <h4 style='margin-bottom: 2px; color: {color};'>✈️ {callsign} | {aerolinea_nom}</h4>
+                <h4 style='margin-bottom: 2px; color: {pred['color']};'>✈️ {callsign} | {aerolinea_nom}</h4>
                 <div style='font-size: 10px; color: gray; margin-bottom: 8px;'>Matrícula: {matricula} | Equipo: {modelo}</div>
                 <b>Ruta:</b> {origen} ➔ <b>{destino}</b><br><hr style='margin: 4px 0;'>
                 <div style='display: flex; justify-content: space-between;'><span><b>Alt:</b> {altitud} ft</span><span><b>Vel:</b> {velocidad} kts</span></div>
                 <div style='display: flex; justify-content: space-between;'><span><b>Rumbo:</b> {rumbo}°</span><span><b>V/S:</b> <span style='color: {v_speed_color};'>{v_speed_str} fpm</span></span></div>
                 <hr style='margin: 4px 0;'>
                 <b>Faltan:</b> {round(horas_restantes, 1)} h <b>(ETA:</b> {eta.strftime('%H:%M')}Z)<br>
-                <b>Riesgo IA:</b> <span style='color:{color}'><b>{icono} {prob_str}</b></span><br>
+                <b>Riesgo IA:</b> <span style='color:{pred['color']}'><b>{pred['icono']} {pred.get('prob_texto', 'N/A')}</b></span><br>
                 <b>Viento:</b> {round(viento_dest)} kts | <b>Lluvia:</b> {round(lluvia_dest, 1)} mm
             </div>
             """
@@ -318,7 +310,7 @@ with tab1:
             folium.Marker(
                 location=[vuelo.get('latitud', 0), vuelo.get('longitud', 0)],
                 popup=folium.Popup(html_popup, max_width=300),
-                icon=folium.Icon(color=color, icon="plane", prefix="fa", angle=vuelo.get('rumbo', 0))
+                icon=folium.Icon(color=pred['color'], icon="plane", prefix="fa", angle=vuelo.get('rumbo', 0))
             ).add_to(mapa)
             vuelos_pintados += 1
 
@@ -340,29 +332,19 @@ with tab2:
                     num = obtener_num_vuelo_seguro(v)
                     cid = str(f_data.get('identification', {}).get('callsign', '')).strip().upper()
                     
-                    # El riesgo ahora debe venir mapeado desde el S3 si Eva lo ha incluido, de momento asumimos BAJA como fallback.
-                    pred = {"prob_texto": "N/A", "icono": "⚪", "alerta": "BAJA"}
+                    pred = predicciones_ia.get(cid, {"prob_texto": "N/A", "icono": "⚪", "alerta": "BAJA"})
                     
                     if pred['alerta'] in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and \
                        (not filtro_aeropuertos or orig in filtro_aeropuertos or target in filtro_aeropuertos) and \
                        (not filtro_vuelos or num in filtro_vuelos):
                         
                         t_est = obtener_timestamp_seguro(v, 'arrival', 'estimated') or obtener_timestamp_seguro(v, 'arrival', 'real')
-                        
-                        aeronave = f_data.get('aircraft', {})
-                        if isinstance(aeronave, dict):
-                            aeronave_code = aeronave.get('model', {}).get('code', 'N/A') if isinstance(aeronave.get('model'), dict) else 'N/A'
-                            aeronave_reg = aeronave.get('registration', 'N/A')
-                        else:
-                            aeronave_code = 'N/A'
-                            aeronave_reg = 'N/A'
-                            
                         datos_llegadas.append({
                             "Programado (Z)": h_vuelo.strftime('%H:%M'), "Estimado (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
-                            "Vuelo": num, "Aerolínea": al, "Aeronave": aeronave_code,
-                            "Matrícula": aeronave_reg, "Origen": orig, "Destino": target, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
+                            "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
+                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": orig, "Destino": target, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
-    if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
+    if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True)
 
 with tab3:
     datos_salidas = []
@@ -378,28 +360,19 @@ with tab3:
                     num = obtener_num_vuelo_seguro(v)
                     cid = str(f_data.get('identification', {}).get('callsign', '')).strip().upper()
                     
-                    pred = {"prob_texto": "N/A", "icono": "⚪", "alerta": "BAJA"}
+                    pred = predicciones_ia.get(cid, {"prob_texto": "N/A", "icono": "⚪", "alerta": "BAJA"})
                     
                     if pred['alerta'] in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and \
                        (not filtro_aeropuertos or target in filtro_aeropuertos or dest in filtro_aeropuertos) and \
                        (not filtro_vuelos or num in filtro_vuelos):
                         
                         t_est = obtener_timestamp_seguro(v, 'departure', 'estimated') or obtener_timestamp_seguro(v, 'departure', 'real')
-                        
-                        aeronave = f_data.get('aircraft', {})
-                        if isinstance(aeronave, dict):
-                            aeronave_code = aeronave.get('model', {}).get('code', 'N/A') if isinstance(aeronave.get('model'), dict) else 'N/A'
-                            aeronave_reg = aeronave.get('registration', 'N/A')
-                        else:
-                            aeronave_code = 'N/A'
-                            aeronave_reg = 'N/A'
-                            
                         datos_salidas.append({
                             "Programado (Z)": h_vuelo.strftime('%H:%M'), "Estimado (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
-                            "Vuelo": num, "Aerolínea": al, "Aeronave": aeronave_code,
-                            "Matrícula": aeronave_reg, "Origen": target, "Destino": dest, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
+                            "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
+                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": target, "Destino": dest, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
-    if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
+    if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True)
 
 with tab4:
     if aeropuerto_destino == "TODOS":
