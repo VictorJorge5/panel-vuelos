@@ -344,7 +344,7 @@ with tab2:
                             "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
                             "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": orig, "Destino": target, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
-    if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True)
+    if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
 
 with tab3:
     datos_salidas = []
@@ -372,7 +372,7 @@ with tab3:
                             "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
                             "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": target, "Destino": dest, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
-    if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True)
+    if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
 
 with tab4:
     if aeropuerto_destino == "TODOS":
