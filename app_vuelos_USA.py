@@ -52,7 +52,7 @@ def cargar_todo_desde_s3():
         return {"error": str(e)}
 
 # --- BLOQUE DE CARGA CRÍTICA ---
-with st.spinner('📡 Sincronizando telemetría y predicciones IA desde AWS Cloud...'):
+with st.spinner('📡 Sincronizando telemetría y predicciones IA con precisión temporal...'):
     data_s3 = cargar_todo_desde_s3()
 
 if data_s3 is None or "error" in data_s3:
@@ -133,7 +133,7 @@ with tab1:
     for v in vuelos_aire:
         if v['aeropuerto_referencia'] in target_iatas:
             callsign = v['callsign']
-            pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "alerta": "BAJA", "color": "gray", "icono": "⚪"})
+            pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "alerta": "BAJA", "color": "gray", "icono": "⚪", "hora_ref_prediccion": "N/A"})
             
             if pred['alerta'] in filtros_activos:
                 html_popup = f"""
@@ -142,7 +142,8 @@ with tab1:
                     <b>Ruta:</b> {v['origen']} ➔ {v['destino']}<br>
                     <b>Alt:</b> {v['altitud']} ft | <b>Vel:</b> {v['velocidad_nudos']} kts<br>
                     <hr>
-                    <b>Riesgo IA:</b> <span style='color:{pred['color']}'><b>{pred['icono']} {pred['prob_texto']}</b></span>
+                    <b>Riesgo IA:</b> <span style='color:{pred['color']}'><b>{pred['icono']} {pred['prob_texto']}</b></span><br>
+                    <small>Previsión para: {pred['hora_ref_prediccion'][-8:-3]}Z</small>
                 </div>
                 """
                 folium.Marker(
@@ -155,36 +156,52 @@ with tab1:
     st_folium(mapa, width=1200, height=550)
 
 with tab2:
-    st.subheader("🛬 Próximas Llegadas")
+    st.subheader("🛬 Próximas Llegadas (Ordenadas por Hora)")
     datos_tabla = []
     for v in llegadas_raw:
         if v.get('target_apt') in target_iatas:
             f_data = v.get('flight', {})
             ident = f_data.get('identification', {})
             callsign = ident.get('number', {}).get('default', 'N/A')
+            
+            # EXTRACCIÓN DE TIEMPOS
+            t_node = f_data.get('time', {})
+            ts_sch = t_node.get('scheduled', {}).get('arrival')
+            hora_prog = datetime.fromtimestamp(ts_sch, timezone.utc).strftime('%H:%M') if ts_sch else "N/A"
+            
             pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "icono": "⚪"})
             
             datos_tabla.append({
+                "Hora (Z)": hora_prog,
                 "Vuelo": callsign,
                 "Origen": f_data.get('airport', {}).get('origin', {}).get('code', {}).get('iata', 'N/A'),
                 "Destino": v.get('target_apt'),
                 "IA Riesgo": pred.get('icono'),
-                "Prob. IA": pred.get('prob_texto')
+                "Prob. IA": pred.get('prob_texto'),
+                "Estado": f_data.get('status', {}).get('text', 'N/A')
             })
     if datos_tabla:
-        st.dataframe(pd.DataFrame(datos_tabla), use_container_width=True)
+        df = pd.DataFrame(datos_tabla).sort_values("Hora (Z)")
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
 with tab3:
-    st.subheader("🛫 Próximas Salidas")
+    st.subheader("🛫 Próximas Salidas (Ordenadas por Hora)")
     datos_tabla_sal = []
     for v in salidas_raw:
         if v.get('target_apt') in target_iatas:
             f_data = v.get('flight', {})
             ident = f_data.get('identification', {})
             callsign = ident.get('number', {}).get('default', 'N/A')
+            
+            # EXTRACCIÓN DE TIEMPOS
+            t_node = f_data.get('time', {})
+            ts_sch = t_node.get('scheduled', {}).get('departure')
+            hora_prog = datetime.fromtimestamp(ts_sch, timezone.utc).strftime('%H:%M') if ts_sch else "N/A"
+            
             pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "icono": "⚪"})
             
             datos_tabla_sal.append({
+                "Hora (Z)": hora_prog,
                 "Vuelo": callsign,
                 "Destino": f_data.get('airport', {}).get('destination', {}).get('code', {}).get('iata', 'N/A'),
                 "Origen": v.get('target_apt'),
@@ -192,7 +209,8 @@ with tab3:
                 "Prob. IA": pred.get('prob_texto')
             })
     if datos_tabla_sal:
-        st.dataframe(pd.DataFrame(datos_tabla_sal), use_container_width=True)
+        df_sal = pd.DataFrame(datos_tabla_sal).sort_values("Hora (Z)")
+        st.dataframe(df_sal, use_container_width=True, hide_index=True)
 
 with tab4:
     if aeropuerto_referencia == "TODOS":
