@@ -17,7 +17,6 @@ st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️
 # --- ESTILOS CSS PERSONALIZADOS ---
 st.markdown("""
     <style>
-    /* Ocultamos elementos específicos del header sin esconder el header entero */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {display: none;}
@@ -33,25 +32,10 @@ st.markdown("""
         border-radius: 8px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     }
-    /* Forzar visibilidad del botón de expandir sidebar siempre */
-    [data-testid="stSidebarCollapsedControl"] {
-        visibility: visible !important;
-        display: flex !important;
-        opacity: 1 !important;
-        z-index: 9999 !important;
-    }
-    [data-testid="stSidebarCollapsedControl"] button {
-        visibility: visible !important;
-        display: flex !important;
-        opacity: 1 !important;
-    }
-    button[aria-label="Open sidebar"],
-    button[aria-label="Abrir barra lateral"] {
-        visibility: visible !important;
-        display: flex !important;
-        opacity: 1 !important;
-        z-index: 9999 !important;
-    }
+    /* Ocultar el botón de colapso de la sidebar */
+    [data-testid="stSidebarCollapseButton"] {display: none !important;}
+    button[aria-label="Close sidebar"] {display: none !important;}
+    button[aria-label="Cerrar barra lateral"] {display: none !important;}
     </style>
 """, unsafe_allow_html=True)
 
