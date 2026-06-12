@@ -222,8 +222,11 @@ else:
     if meteo_apt:
         hora_act_str = hora_actual.replace(minute=0, second=0, microsecond=0).strftime('%Y-%m-%dT%H:00')
         clima_ahora = meteo_apt.get(hora_act_str)
-        # El JSON puede mandar listas o diccionarios/números crudos
-        if clima_ahora and isinstance(clima_ahora, list) and len(clima_ahora) >= 2:
+        # Ajuste de extracción segura para diccionarios de Open-Meteo
+        if clima_ahora and isinstance(clima_ahora, dict):
+            viento_kts = clima_ahora.get('viento_kts', 0)
+            rafagas = clima_ahora.get('rafagas_kts', 0)
+        elif clima_ahora and isinstance(clima_ahora, list) and len(clima_ahora) >= 2:
             viento_kts, rafagas = clima_ahora[0], clima_ahora[1]
         elif clima_ahora and isinstance(clima_ahora, (int, float)):
             viento_kts = clima_ahora
@@ -250,6 +253,12 @@ with tab1:
         clima_apt = dicc_meteo.get(apt, {}).get(hora_str_clave)
         if clima_apt and isinstance(clima_apt, list) and len(clima_apt) >= 3:
             vel_viento, dir_viento = clima_apt[0], clima_apt[2]
+            rotacion_flecha = (dir_viento + 180) % 360
+            html_vector_viento = f"<div style='font-family: Arial; font-size: 11px; color: #fff; font-weight: bold; background: rgba(15,23,42,0.8); border: 1px solid #3b82f6; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; white-space: nowrap; transform: translate(15px, -15px);'><i class='fa fa-arrow-up' style='transform: rotate({rotacion_flecha}deg); margin-right: 4px; color: #3b82f6;'></i>{round(vel_viento)} kts</div>"
+            folium.Marker(location=AEROPUERTOS[apt]["coords"], icon=folium.DivIcon(html=html_vector_viento)).add_to(mapa)
+        elif clima_apt and isinstance(clima_apt, dict):
+            vel_viento = clima_apt.get('viento_kts', 0)
+            dir_viento = clima_apt.get('direccion', 0)
             rotacion_flecha = (dir_viento + 180) % 360
             html_vector_viento = f"<div style='font-family: Arial; font-size: 11px; color: #fff; font-weight: bold; background: rgba(15,23,42,0.8); border: 1px solid #3b82f6; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; white-space: nowrap; transform: translate(15px, -15px);'><i class='fa fa-arrow-up' style='transform: rotate({rotacion_flecha}deg); margin-right: 4px; color: #3b82f6;'></i>{round(vel_viento)} kts</div>"
             folium.Marker(location=AEROPUERTOS[apt]["coords"], icon=folium.DivIcon(html=html_vector_viento)).add_to(mapa)
@@ -281,7 +290,10 @@ with tab1:
             hora_eta_str = eta.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00")
             meteo_dest = dicc_meteo.get(destino, {}).get(hora_eta_str)
             viento_dest, lluvia_dest = 0, 0
-            if meteo_dest and isinstance(meteo_dest, list) and len(meteo_dest) >= 7:
+            if meteo_dest and isinstance(meteo_dest, dict):
+                viento_dest = meteo_dest.get('viento_kts', 0)
+                lluvia_dest = meteo_dest.get('precip', 0)
+            elif meteo_dest and isinstance(meteo_dest, list) and len(meteo_dest) >= 7:
                 viento_dest, lluvia_dest = meteo_dest[0], meteo_dest[6]
             elif meteo_dest and isinstance(meteo_dest, (int, float)):
                 viento_dest = meteo_dest
@@ -389,12 +401,15 @@ with tab4:
                     vientos_limitados = {}
                     for h in horas_continuas:
                         val = datos_apt.get(h)
-                        if val:
-                            vientos_limitados[h.split('T')[1]] = val[0] if isinstance(val, list) else val
+                        if val and isinstance(val, dict):
+                            vientos_limitados[h.split('T')[1]] = val.get('viento_kts', 0)
+                        elif val and isinstance(val, list) and len(val) >= 1:
+                            vientos_limitados[h.split('T')[1]] = val[0]
                     
                     if vientos_limitados:
                         df_clima = pd.DataFrame(list(vientos_limitados.values()), index=list(vientos_limitados.keys()), columns=["Viento (kts)"])
                         st.line_chart(df_clima, color="#2563eb")
+                    else: st.info("Sin datos meteorológicos válidos en la franja horaria.")
                 else: st.info("Sin datos meteorológicos disponibles en S3.")
                 
         with row1_col2:
@@ -404,12 +419,15 @@ with tab4:
                     lluvia_limitada = {}
                     for h in horas_continuas:
                         val = datos_apt.get(h)
-                        if val and isinstance(val, list) and len(val) >= 7:
+                        if val and isinstance(val, dict):
+                            lluvia_limitada[h.split('T')[1]] = val.get('precip', 0)
+                        elif val and isinstance(val, list) and len(val) >= 7:
                             lluvia_limitada[h.split('T')[1]] = val[6] 
                     
                     if lluvia_limitada:
                         df_precip = pd.DataFrame(list(lluvia_limitada.values()), index=list(lluvia_limitada.keys()), columns=["Lluvia (mm)"])
                         st.bar_chart(df_precip, color="#2563eb")
+                    else: st.info("Sin pronóstico de lluvia estructurado.")
                 else: st.info("Sin pronóstico de lluvia en S3.")
 
         # --- FILA 2: CARGA OPERATIVA Y AEROLÍNEAS ---
