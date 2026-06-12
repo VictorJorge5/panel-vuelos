@@ -32,14 +32,25 @@ st.markdown("""
         border-radius: 8px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     }
-    /* Ocultar el botón de colapso de la sidebar */
+    /* Forzar sidebar siempre visible — impedir colapso en móvil */
+    section[data-testid="stSidebar"] {
+        transform: none !important;
+        display: flex !important;
+        min-width: 245px !important;
+        left: 0 !important;
+    }
+    section[data-testid="stSidebar"][aria-expanded="false"] {
+        transform: none !important;
+        display: flex !important;
+        min-width: 245px !important;
+    }
     [data-testid="stSidebarCollapseButton"] {display: none !important;}
     button[aria-label="Close sidebar"] {display: none !important;}
     button[aria-label="Cerrar barra lateral"] {display: none !important;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- FUNCIÓN DE CARGA DESDE S3 (100% CLOUD, CERO FALLBACKS) ---
+# --- FUNCIÓN DE CARGA DESDE S3 ---
 @st.cache_data(ttl=60)
 def cargar_todo_desde_s3():
     try:
@@ -82,7 +93,7 @@ AEROPUERTOS = {
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
 
-# --- FUNCIONES DE APOYO (DISTANCIA Y FOTOS) ---
+# --- FUNCIONES DE APOYO ---
 def calcular_distancia_nm(lat1, lon1, lat2, lon2):
     R = 3440.065
     dLat = math.radians(lat2 - lat1)
@@ -111,7 +122,6 @@ def obtener_foto_aeronave_ia(matricula):
     except Exception: pass
     return None, None, None
 
-# --- EXTRACCIÓN SEGURA DESDE LOS JSON ANIDADOS DE LLEGADAS/SALIDAS ---
 def obtener_iata_seguro(nodo):
     try: return nodo['code'].get('iata', 'N/A') if isinstance(nodo, dict) and isinstance(nodo.get('code'), dict) else 'N/A'
     except: return 'N/A'
@@ -179,7 +189,7 @@ filtro_aerolineas = st.sidebar.multiselect("✈️ Filtrar por Aerolínea", sort
 filtro_aeropuertos = st.sidebar.multiselect("📍 Filtrar por Aeropuerto", sorted([str(x) for x in aeropuertos_disponibles]))
 filtro_vuelos = st.sidebar.multiselect("🔢 Filtrar por Nº Vuelo", sorted([str(x) for x in numeros_vuelo_disponibles]), placeholder="Buscar...")
 
-# --- PREPARACIÓN DE VUELOS (FILTRO ESTRICTO DE DESTINO) ---
+# --- PREPARACIÓN DE VUELOS ---
 vuelos_aire_filtrados = []
 for v in vuelos_aire:
     destino = v.get('destino', '').strip().upper()
@@ -236,13 +246,10 @@ tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar en Vivo", "🛬 Panel de Llegad
 with tab1:
     map_center = [39.5, -98.35] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 5, tiles="CartoDB dark_matter")
-
     url_lluvia = obtener_url_radar_lluvia()
     if url_lluvia:
         folium.TileLayer(tiles=url_lluvia, attr='Weather data © RainViewer', name='Radar de Precipitaciones', overlay=True, control=True, opacity=0.55).add_to(mapa)
-
     hora_str_clave = hora_actual.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00")
-
     for apt in target_iatas:
         folium.Marker(location=AEROPUERTOS[apt]["coords"], popup=f"<b>{AEROPUERTOS[apt]['nombre']}</b>", icon=folium.Icon(color="black", icon="building", prefix="fa")).add_to(mapa)
         clima_apt = dicc_meteo.get(apt, {}).get(hora_str_clave)
@@ -251,7 +258,6 @@ with tab1:
             rotacion_flecha = (dir_viento + 180) % 360
             html_vector_viento = f"<div style='font-family: Arial; font-size: 11px; color: #fff; font-weight: bold; background: rgba(15,23,42,0.8); border: 1px solid #3b82f6; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; white-space: nowrap; transform: translate(15px, -15px);'><i class='fa fa-arrow-up' style='transform: rotate({rotacion_flecha}deg); margin-right: 4px; color: #3b82f6;'></i>{round(vel_viento)} kts</div>"
             folium.Marker(location=AEROPUERTOS[apt]["coords"], icon=folium.DivIcon(html=html_vector_viento)).add_to(mapa)
-
     vuelos_pintados = 0
     for vuelo in vuelos_aire_filtrados:
         destino = vuelo.get('destino_real', 'N/A')
@@ -279,7 +285,7 @@ with tab1:
                 viento_dest = meteo_dest
             foto_url, foto_link, fotografo = dicc_fotos.get(matricula, (None, None, None))
             if foto_url:
-                foto_html = f"<div style='margin-bottom: 8px;'><a href='{foto_link}' target='_blank' title='Ver imagen original'><img src='{foto_url}' width='100%' style='border-radius: 4px; border: 1px solid #ccc; max-height: 140px; object-fit: cover;'></a><div style='font-size: 8px; color: #64748b; text-align: right; margin-top: 2px;'>© {fotografo} | Planespotters.net</div></div>"
+                foto_html = f"<div style='margin-bottom: 8px;'><a href='{foto_link}' target='_blank'><img src='{foto_url}' width='100%' style='border-radius: 4px; border: 1px solid #ccc; max-height: 140px; object-fit: cover;'></a><div style='font-size: 8px; color: #64748b; text-align: right; margin-top: 2px;'>© {fotografo} | Planespotters.net</div></div>"
             else:
                 foto_html = f"<div style='margin-bottom: 8px; text-align: center; background: #e2e8f0; padding: 10px; border-radius: 4px; font-size: 11px;'><a href='https://www.jetphotos.com/registration/{matricula}' target='_blank' style='text-decoration: none; color: #3b82f6;'>📷 Buscar archivo de {matricula} en JetPhotos</a></div>"
             html_popup = f"""
@@ -302,7 +308,6 @@ with tab1:
                 icon=folium.Icon(color=pred['color'], icon="plane", prefix="fa", angle=vuelo.get('rumbo', 0))
             ).add_to(mapa)
             vuelos_pintados += 1
-
     folium.LayerControl().add_to(mapa)
     st_folium(mapa, width=1200, height=600, returned_objects=[])
     st.success(f"Radar Activo: Mostrando **{vuelos_pintados}** aviones hacia tus aeropuertos.")
@@ -328,7 +333,8 @@ with tab2:
                         datos_llegadas.append({
                             "Programado (Z)": h_vuelo.strftime('%H:%M'), "Estimado (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
                             "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
-                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": orig, "Destino": target, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
+                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": orig, "Destino": target,
+                            "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
     if datos_llegadas:
         st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
@@ -356,7 +362,8 @@ with tab3:
                         datos_salidas.append({
                             "Programado (Z)": h_vuelo.strftime('%H:%M'), "Estimado (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
                             "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
-                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": target, "Destino": dest, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
+                            "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": target, "Destino": dest,
+                            "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
     if datos_salidas:
         st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
@@ -384,7 +391,6 @@ with tab4:
                         st.line_chart(df_clima, color="#2563eb")
                     else: st.info("Sin datos meteorológicos válidos en la franja horaria.")
                 else: st.info("Sin datos meteorológicos disponibles en S3.")
-
         with row1_col2:
             with st.container(border=True):
                 st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
@@ -399,7 +405,6 @@ with tab4:
                         st.bar_chart(df_precip, color="#2563eb")
                     else: st.info("Sin pronóstico de lluvia estructurado.")
                 else: st.info("Sin pronóstico de lluvia en S3.")
-
         row2_col1, row2_col2 = st.columns(2)
         with row2_col1:
             with st.container(border=True):
@@ -415,7 +420,6 @@ with tab4:
                                 if h_str in conteo: conteo[h_str] += 1
                 df_horas = pd.DataFrame(list(conteo.items()), columns=["Hora", "Vuelos"])
                 st.altair_chart(alt.Chart(df_horas).mark_bar(color="#ea580c", cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(x=alt.X("Hora", sort=None, axis=alt.Axis(grid=False)), y=alt.Y("Vuelos", axis=alt.Axis(grid=True, gridColor="#e2e8f0")), tooltip=["Hora", "Vuelos"]).properties(height=300).configure_view(strokeWidth=0), use_container_width=True)
-
         with row2_col2:
             with st.container(border=True):
                 st.markdown(f"**Distribución de Aerolíneas (Próximas {horas_prediccion}h)**")
@@ -433,7 +437,6 @@ with tab4:
                     conteo_al.columns = ["Aerolínea", "Vuelos"]
                     st.altair_chart(alt.Chart(conteo_al.head(10)).mark_bar(color="#2563eb", cornerRadiusEnd=4).encode(x=alt.X("Aerolínea", sort="-y", axis=alt.Axis(grid=False, labelAngle=-45)), y=alt.Y("Vuelos", axis=alt.Axis(grid=True, gridColor="#e2e8f0")), tooltip=["Aerolínea", "Vuelos"]).properties(height=300).configure_view(strokeWidth=0), use_container_width=True)
                 else: st.info("No hay suficientes datos en esta franja horaria.")
-
         st.markdown("---")
         st.markdown(f"### 📋 Reportes Aeronáuticos (METAR / TAF) - {aeropuerto_destino}")
         m_t = metar_taf.get(aeropuerto_destino, {})
