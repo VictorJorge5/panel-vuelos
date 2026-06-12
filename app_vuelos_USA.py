@@ -30,6 +30,15 @@ st.markdown("""
         border-radius: 8px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     }
+    /* Mantener visible el botón de sidebar en móvil */
+    [data-testid="stSidebarCollapsedControl"] {
+        visibility: visible !important;
+        display: block !important;
+    }
+    [data-testid="collapsedControl"] {
+        visibility: visible !important;
+        display: block !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -204,7 +213,7 @@ if matriculas_mapa:
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
 st.success(f"✅ Sincronizado: {metadata.get('snapshot_id', 'Snapshot AWS S3')}")
-st.markdown(f"**Powered by Cloud AI Predictions** | ⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
+st.markdown(f"⏱️ Hora del Sistema (UTC): `{hora_actual.strftime('%Y-%m-%d %H:%M:%S')} ZULU`")
 
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Vuelos en Radar", len(vuelos_aire_filtrados), "Volando hacia destinos")
@@ -219,7 +228,6 @@ else:
     if meteo_apt:
         hora_act_str = hora_actual.replace(minute=0, second=0, microsecond=0).strftime('%Y-%m-%dT%H:00')
         clima_ahora = meteo_apt.get(hora_act_str)
-        # Lectura directa desde la lista limpia generada por la nueva Lambda de Ingesta
         if clima_ahora and isinstance(clima_ahora, list) and len(clima_ahora) >= 2:
             viento_kts, rafagas = clima_ahora[0], clima_ahora[1]
         elif clima_ahora and isinstance(clima_ahora, (int, float)):
@@ -315,7 +323,6 @@ with tab1:
 
 with tab2:
     datos_llegadas = []
-    # Agregamos una tolerancia de 8 horas hacia atrás para no ocultar la operativa de EE. UU.
     for v in llegadas_raw:
         if v.get('target_apt') in target_iatas:
             t_sched = obtener_timestamp_seguro(v, 'arrival', 'scheduled')
@@ -347,7 +354,6 @@ with tab2:
 
 with tab3:
     datos_salidas = []
-    # Agregamos una tolerancia de 8 horas hacia atrás para no ocultar la operativa de EE. UU.
     for v in salidas_raw:
         if v.get('target_apt') in target_iatas:
             t_sched = obtener_timestamp_seguro(v, 'departure', 'scheduled')
@@ -392,7 +398,6 @@ with tab4:
                     vientos_limitados = {}
                     for h in horas_continuas:
                         val = datos_apt.get(h)
-                        # Lectura nativa directa por posición desde la lista limpia en S3
                         if val and isinstance(val, list) and len(val) >= 1:
                             vientos_limitados[h.split('T')[1]] = val[0]
                     
@@ -409,7 +414,6 @@ with tab4:
                     lluvia_limitada = {}
                     for h in horas_continuas:
                         val = datos_apt.get(h)
-                        # Lectura nativa directa por posición desde la lista limpia en S3
                         if val and isinstance(val, list) and len(val) >= 7:
                             lluvia_limitada[h.split('T')[1]] = val[6] 
                     
