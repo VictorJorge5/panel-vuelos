@@ -63,7 +63,6 @@ vuelos_aire = data_s3.get('vuelos_en_aire', [])
 llegadas_raw = data_s3.get('llegadas_programadas', [])
 salidas_raw = data_s3.get('salidas_programadas', [])
 dicc_meteo = data_s3.get('meteo_detallada', {})
-# Diccionario con el Riesgo ya procesado por AWS
 predicciones_ia = {str(k).strip().upper(): v for k, v in data_s3.get('predicciones_ia', {}).items()}
 metar_taf = data_s3.get('metar_taf', {})
 metadata = data_s3.get('metadata', {})
@@ -180,14 +179,12 @@ for v in vuelos_aire:
     destino = v.get('destino', '').strip().upper()
     origen = v.get('origen', '').strip().upper()
     
-    # Si no tiene destino explícito, asume el aeropuerto de referencia
     if not destino: 
         destino = v.get('aeropuerto_referencia', '').strip().upper()
         
     callsign = v.get('callsign', 'N/A')
     aerolinea_vuelo = v.get('aerolinea_icao', 'N/A')
     
-    # FILTRO RADAR: Solo agregamos si el vuelo va a uno de los aeropuertos en la lista actual
     if destino in target_iatas:
         if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
            (not filtro_vuelos or callsign in filtro_vuelos) and \
@@ -222,11 +219,8 @@ else:
     if meteo_apt:
         hora_act_str = hora_actual.replace(minute=0, second=0, microsecond=0).strftime('%Y-%m-%dT%H:00')
         clima_ahora = meteo_apt.get(hora_act_str)
-        # Ajuste de extracción segura para diccionarios de Open-Meteo
-        if clima_ahora and isinstance(clima_ahora, dict):
-            viento_kts = clima_ahora.get('viento_kts', 0)
-            rafagas = clima_ahora.get('rafagas_kts', 0)
-        elif clima_ahora and isinstance(clima_ahora, list) and len(clima_ahora) >= 2:
+        # Lectura directa desde la lista limpia generada por la nueva Lambda de Ingesta
+        if clima_ahora and isinstance(clima_ahora, list) and len(clima_ahora) >= 2:
             viento_kts, rafagas = clima_ahora[0], clima_ahora[1]
         elif clima_ahora and isinstance(clima_ahora, (int, float)):
             viento_kts = clima_ahora
@@ -256,12 +250,6 @@ with tab1:
             rotacion_flecha = (dir_viento + 180) % 360
             html_vector_viento = f"<div style='font-family: Arial; font-size: 11px; color: #fff; font-weight: bold; background: rgba(15,23,42,0.8); border: 1px solid #3b82f6; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; white-space: nowrap; transform: translate(15px, -15px);'><i class='fa fa-arrow-up' style='transform: rotate({rotacion_flecha}deg); margin-right: 4px; color: #3b82f6;'></i>{round(vel_viento)} kts</div>"
             folium.Marker(location=AEROPUERTOS[apt]["coords"], icon=folium.DivIcon(html=html_vector_viento)).add_to(mapa)
-        elif clima_apt and isinstance(clima_apt, dict):
-            vel_viento = clima_apt.get('viento_kts', 0)
-            dir_viento = clima_apt.get('direccion', 0)
-            rotacion_flecha = (dir_viento + 180) % 360
-            html_vector_viento = f"<div style='font-family: Arial; font-size: 11px; color: #fff; font-weight: bold; background: rgba(15,23,42,0.8); border: 1px solid #3b82f6; padding: 2px 6px; border-radius: 4px; display: inline-flex; align-items: center; white-space: nowrap; transform: translate(15px, -15px);'><i class='fa fa-arrow-up' style='transform: rotate({rotacion_flecha}deg); margin-right: 4px; color: #3b82f6;'></i>{round(vel_viento)} kts</div>"
-            folium.Marker(location=AEROPUERTOS[apt]["coords"], icon=folium.DivIcon(html=html_vector_viento)).add_to(mapa)
 
     vuelos_pintados = 0
     for vuelo in vuelos_aire_filtrados:
@@ -282,18 +270,13 @@ with tab1:
         horas_restantes = calcular_distancia_nm(vuelo.get('latitud', 0), vuelo.get('longitud', 0), AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(velocidad if isinstance(velocidad, (int, float)) else 1, 1) if destino in AEROPUERTOS else 0
         eta = hora_actual + timedelta(hours=horas_restantes)
         
-        # OBTENEMOS LA IA DIRECTAMENTE DE S3
         pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "alerta": "BAJA", "color": "gray", "icono": "⚪"})
         
         if pred['alerta'] in filtros_activos:
-            # Obtener datos de viento/lluvia destino para el popup
             hora_eta_str = eta.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00")
             meteo_dest = dicc_meteo.get(destino, {}).get(hora_eta_str)
             viento_dest, lluvia_dest = 0, 0
-            if meteo_dest and isinstance(meteo_dest, dict):
-                viento_dest = meteo_dest.get('viento_kts', 0)
-                lluvia_dest = meteo_dest.get('precip', 0)
-            elif meteo_dest and isinstance(meteo_dest, list) and len(meteo_dest) >= 7:
+            if meteo_dest and isinstance(meteo_dest, list) and len(meteo_dest) >= 7:
                 viento_dest, lluvia_dest = meteo_dest[0], meteo_dest[6]
             elif meteo_dest and isinstance(meteo_dest, (int, float)):
                 viento_dest = meteo_dest
@@ -332,12 +315,13 @@ with tab1:
 
 with tab2:
     datos_llegadas = []
+    # Agregamos una tolerancia de 8 horas hacia atrás para no ocultar la operativa de EE. UU.
     for v in llegadas_raw:
         if v.get('target_apt') in target_iatas:
             t_sched = obtener_timestamp_seguro(v, 'arrival', 'scheduled')
             if t_sched:
                 h_vuelo = datetime.fromtimestamp(t_sched, timezone.utc)
-                if hora_actual <= h_vuelo <= limite_tiempo:
+                if (hora_actual - timedelta(hours=8)) <= h_vuelo <= limite_tiempo:
                     target, f_data = v.get('target_apt'), v.get('flight', {})
                     orig = obtener_iata_seguro(f_data.get('airport', {}).get('origin'))
                     al = obtener_aerolinea_segura(v)
@@ -356,16 +340,20 @@ with tab2:
                             "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
                             "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": orig, "Destino": target, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
-    if datos_llegadas: st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
+    if datos_llegadas: 
+        st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay vuelos de llegada programados en la franja temporal activa.")
 
 with tab3:
     datos_salidas = []
+    # Agregamos una tolerancia de 8 horas hacia atrás para no ocultar la operativa de EE. UU.
     for v in salidas_raw:
         if v.get('target_apt') in target_iatas:
             t_sched = obtener_timestamp_seguro(v, 'departure', 'scheduled')
             if t_sched:
                 h_vuelo = datetime.fromtimestamp(t_sched, timezone.utc)
-                if hora_actual <= h_vuelo <= limite_tiempo:
+                if (hora_actual - timedelta(hours=8)) <= h_vuelo <= limite_tiempo:
                     target, f_data = v.get('target_apt'), v.get('flight', {})
                     dest = obtener_iata_seguro(f_data.get('airport', {}).get('destination'))
                     al = obtener_aerolinea_segura(v)
@@ -384,7 +372,10 @@ with tab3:
                             "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
                             "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": target, "Destino": dest, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
-    if datos_salidas: st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
+    if datos_salidas: 
+        st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay vuelos de salida programados en la franja temporal activa.")
 
 with tab4:
     if aeropuerto_destino == "TODOS":
@@ -401,9 +392,8 @@ with tab4:
                     vientos_limitados = {}
                     for h in horas_continuas:
                         val = datos_apt.get(h)
-                        if val and isinstance(val, dict):
-                            vientos_limitados[h.split('T')[1]] = val.get('viento_kts', 0)
-                        elif val and isinstance(val, list) and len(val) >= 1:
+                        # Lectura nativa directa por posición desde la lista limpia en S3
+                        if val and isinstance(val, list) and len(val) >= 1:
                             vientos_limitados[h.split('T')[1]] = val[0]
                     
                     if vientos_limitados:
@@ -419,9 +409,8 @@ with tab4:
                     lluvia_limitada = {}
                     for h in horas_continuas:
                         val = datos_apt.get(h)
-                        if val and isinstance(val, dict):
-                            lluvia_limitada[h.split('T')[1]] = val.get('precip', 0)
-                        elif val and isinstance(val, list) and len(val) >= 7:
+                        # Lectura nativa directa por posición desde la lista limpia en S3
+                        if val and isinstance(val, list) and len(val) >= 7:
                             lluvia_limitada[h.split('T')[1]] = val[6] 
                     
                     if lluvia_limitada:
@@ -441,7 +430,7 @@ with tab4:
                         t = obtener_timestamp_seguro(v, 'arrival' if v in llegadas_raw else 'departure', 'scheduled')
                         if t:
                             h_vuelo = datetime.fromtimestamp(t, timezone.utc)
-                            if hora_actual <= h_vuelo <= limite_tiempo:
+                            if (hora_actual - timedelta(hours=8)) <= h_vuelo <= limite_tiempo:
                                 h_str = h_vuelo.strftime('%H:00')
                                 if h_str in conteo: conteo[h_str] += 1
                 df_horas = pd.DataFrame(list(conteo.items()), columns=["Hora", "Vuelos"])
@@ -456,7 +445,7 @@ with tab4:
                         t = obtener_timestamp_seguro(v, 'arrival' if v in llegadas_raw else 'departure', 'scheduled')
                         if t:
                             h_vuelo = datetime.fromtimestamp(t, timezone.utc)
-                            if hora_actual <= h_vuelo <= limite_tiempo:
+                            if (hora_actual - timedelta(hours=8)) <= h_vuelo <= limite_tiempo:
                                 al = obtener_aerolinea_segura(v)
                                 if al != "N/A": todas_ops.append(al)
                 if todas_ops:
