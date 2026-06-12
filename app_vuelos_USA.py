@@ -17,10 +17,12 @@ st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️
 # --- ESTILOS CSS PERSONALIZADOS ---
 st.markdown("""
     <style>
+    /* Ocultamos elementos específicos del header sin esconder el header entero */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {display: none;}
     [data-testid="stToolbar"] {visibility: hidden;}
+    [data-testid="stStatusWidget"] {visibility: hidden;}
     [data-testid="stDecoration"] {display: none;}
     header {background-color: transparent !important;}
     .block-container { padding-top: 2rem; padding-bottom: 1rem; }
@@ -30,6 +32,25 @@ st.markdown("""
         padding: 15px;
         border-radius: 8px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+    }
+    /* Forzar visibilidad del botón de expandir sidebar siempre */
+    [data-testid="stSidebarCollapsedControl"] {
+        visibility: visible !important;
+        display: flex !important;
+        opacity: 1 !important;
+        z-index: 9999 !important;
+    }
+    [data-testid="stSidebarCollapsedControl"] button {
+        visibility: visible !important;
+        display: flex !important;
+        opacity: 1 !important;
+    }
+    button[aria-label="Open sidebar"],
+    button[aria-label="Abrir barra lateral"] {
+        visibility: visible !important;
+        display: flex !important;
+        opacity: 1 !important;
+        z-index: 9999 !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -91,7 +112,7 @@ def obtener_url_radar_lluvia():
     try:
         data = requests.get("https://api.rainviewer.com/public/weather-maps.json", timeout=5).json()
         return f"{data.get('host', 'https://tilecache.rainviewer.com')}{data['radar']['past'][-1]['path']}/256/{{z}}/{{x}}/{{y}}/2/1_1.png"
-    except: 
+    except:
         return None
 
 @st.cache_data(ttl=86400)
@@ -179,13 +200,10 @@ vuelos_aire_filtrados = []
 for v in vuelos_aire:
     destino = v.get('destino', '').strip().upper()
     origen = v.get('origen', '').strip().upper()
-    
-    if not destino: 
+    if not destino:
         destino = v.get('aeropuerto_referencia', '').strip().upper()
-        
     callsign = v.get('callsign', 'N/A')
     aerolinea_vuelo = v.get('aerolinea_icao', 'N/A')
-    
     if destino in target_iatas:
         if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
            (not filtro_vuelos or callsign in filtro_vuelos) and \
@@ -234,7 +252,7 @@ tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar en Vivo", "🛬 Panel de Llegad
 with tab1:
     map_center = [39.5, -98.35] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 5, tiles="CartoDB dark_matter")
-    
+
     url_lluvia = obtener_url_radar_lluvia()
     if url_lluvia:
         folium.TileLayer(tiles=url_lluvia, attr='Weather data © RainViewer', name='Radar de Precipitaciones', overlay=True, control=True, opacity=0.55).add_to(mapa)
@@ -243,7 +261,6 @@ with tab1:
 
     for apt in target_iatas:
         folium.Marker(location=AEROPUERTOS[apt]["coords"], popup=f"<b>{AEROPUERTOS[apt]['nombre']}</b>", icon=folium.Icon(color="black", icon="building", prefix="fa")).add_to(mapa)
-
         clima_apt = dicc_meteo.get(apt, {}).get(hora_str_clave)
         if clima_apt and isinstance(clima_apt, list) and len(clima_apt) >= 3:
             vel_viento, dir_viento = clima_apt[0], clima_apt[2]
@@ -263,15 +280,11 @@ with tab1:
         matricula = vuelo.get('matricula', 'N/A')
         modelo = vuelo.get('modelo_avion', 'N/A')
         v_speed = vuelo.get('velocidad_vertical', 0)
-        
         v_speed_str = f"+{v_speed}" if v_speed > 0 else str(v_speed)
         v_speed_color = "green" if v_speed > 0 else "red" if v_speed < 0 else "gray"
-        
         horas_restantes = calcular_distancia_nm(vuelo.get('latitud', 0), vuelo.get('longitud', 0), AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(velocidad if isinstance(velocidad, (int, float)) else 1, 1) if destino in AEROPUERTOS else 0
         eta = hora_actual + timedelta(hours=horas_restantes)
-        
         pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "alerta": "BAJA", "color": "gray", "icono": "⚪"})
-        
         if pred['alerta'] in filtros_activos:
             hora_eta_str = eta.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00")
             meteo_dest = dicc_meteo.get(destino, {}).get(hora_eta_str)
@@ -280,13 +293,11 @@ with tab1:
                 viento_dest, lluvia_dest = meteo_dest[0], meteo_dest[6]
             elif meteo_dest and isinstance(meteo_dest, (int, float)):
                 viento_dest = meteo_dest
-            
             foto_url, foto_link, fotografo = dicc_fotos.get(matricula, (None, None, None))
             if foto_url:
                 foto_html = f"<div style='margin-bottom: 8px;'><a href='{foto_link}' target='_blank' title='Ver imagen original'><img src='{foto_url}' width='100%' style='border-radius: 4px; border: 1px solid #ccc; max-height: 140px; object-fit: cover;'></a><div style='font-size: 8px; color: #64748b; text-align: right; margin-top: 2px;'>© {fotografo} | Planespotters.net</div></div>"
             else:
                 foto_html = f"<div style='margin-bottom: 8px; text-align: center; background: #e2e8f0; padding: 10px; border-radius: 4px; font-size: 11px;'><a href='https://www.jetphotos.com/registration/{matricula}' target='_blank' style='text-decoration: none; color: #3b82f6;'>📷 Buscar archivo de {matricula} en JetPhotos</a></div>"
-
             html_popup = f"""
             <div style='font-family: Arial; font-size: 12px; width: 250px;'>
                 {foto_html}
@@ -301,7 +312,6 @@ with tab1:
                 <b>Viento:</b> {round(viento_dest)} kts | <b>Lluvia:</b> {round(lluvia_dest, 1)} mm
             </div>
             """
-            
             folium.Marker(
                 location=[vuelo.get('latitud', 0), vuelo.get('longitud', 0)],
                 popup=folium.Popup(html_popup, max_width=300),
@@ -326,20 +336,17 @@ with tab2:
                     al = obtener_aerolinea_segura(v)
                     num = obtener_num_vuelo_seguro(v)
                     cid = str(f_data.get('identification', {}).get('callsign', '')).strip().upper()
-                    
                     pred = predicciones_ia.get(cid, {"prob_texto": "N/A", "icono": "⚪", "alerta": "BAJA"})
-                    
                     if pred['alerta'] in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and \
                        (not filtro_aeropuertos or orig in filtro_aeropuertos or target in filtro_aeropuertos) and \
                        (not filtro_vuelos or num in filtro_vuelos):
-                        
                         t_est = obtener_timestamp_seguro(v, 'arrival', 'estimated') or obtener_timestamp_seguro(v, 'arrival', 'real')
                         datos_llegadas.append({
                             "Programado (Z)": h_vuelo.strftime('%H:%M'), "Estimado (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
                             "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
                             "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": orig, "Destino": target, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
-    if datos_llegadas: 
+    if datos_llegadas:
         st.dataframe(pd.DataFrame(datos_llegadas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
     else:
         st.info("No hay vuelos de llegada programados en la franja temporal activa.")
@@ -357,20 +364,17 @@ with tab3:
                     al = obtener_aerolinea_segura(v)
                     num = obtener_num_vuelo_seguro(v)
                     cid = str(f_data.get('identification', {}).get('callsign', '')).strip().upper()
-                    
                     pred = predicciones_ia.get(cid, {"prob_texto": "N/A", "icono": "⚪", "alerta": "BAJA"})
-                    
                     if pred['alerta'] in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and \
                        (not filtro_aeropuertos or target in filtro_aeropuertos or dest in filtro_aeropuertos) and \
                        (not filtro_vuelos or num in filtro_vuelos):
-                        
                         t_est = obtener_timestamp_seguro(v, 'departure', 'estimated') or obtener_timestamp_seguro(v, 'departure', 'real')
                         datos_salidas.append({
                             "Programado (Z)": h_vuelo.strftime('%H:%M'), "Estimado (Z)": datetime.fromtimestamp(t_est, timezone.utc).strftime('%H:%M') if t_est else "N/A",
                             "Vuelo": num, "Aerolínea": al, "Aeronave": f_data.get('aircraft', {}).get('model', {}).get('code', 'N/A') if f_data.get('aircraft') else "N/A",
                             "Matrícula": f_data.get('aircraft', {}).get('registration', 'N/A') if f_data.get('aircraft') else "N/A", "Origen": target, "Destino": dest, "Probabilidad IA": f"{pred['icono']} {pred.get('prob_texto', 'N/A')}", "Nivel Alerta": pred['icono']
                         })
-    if datos_salidas: 
+    if datos_salidas:
         st.dataframe(pd.DataFrame(datos_salidas).sort_values("Programado (Z)"), use_container_width=True, hide_index=True)
     else:
         st.info("No hay vuelos de salida programados en la franja temporal activa.")
@@ -379,7 +383,6 @@ with tab4:
     if aeropuerto_destino == "TODOS":
         st.warning("⚠️ Selecciona un aeropuerto específico en la barra lateral para ver su dashboard detallado y los reportes METAR/TAF.")
     else:
-        # --- FILA 1: VIENTO Y PRECIPITACIONES ---
         row1_col1, row1_col2 = st.columns(2)
         with row1_col1:
             with st.container(border=True):
@@ -392,13 +395,12 @@ with tab4:
                         val = datos_apt.get(h)
                         if val and isinstance(val, list) and len(val) >= 1:
                             vientos_limitados[h.split('T')[1]] = val[0]
-                    
                     if vientos_limitados:
                         df_clima = pd.DataFrame(list(vientos_limitados.values()), index=list(vientos_limitados.keys()), columns=["Viento (kts)"])
                         st.line_chart(df_clima, color="#2563eb")
                     else: st.info("Sin datos meteorológicos válidos en la franja horaria.")
                 else: st.info("Sin datos meteorológicos disponibles en S3.")
-                
+
         with row1_col2:
             with st.container(border=True):
                 st.markdown(f"**Precipitaciones Esperadas (Próximas 24h) - {aeropuerto_destino}**")
@@ -407,15 +409,13 @@ with tab4:
                     for h in horas_continuas:
                         val = datos_apt.get(h)
                         if val and isinstance(val, list) and len(val) >= 7:
-                            lluvia_limitada[h.split('T')[1]] = val[6] 
-                    
+                            lluvia_limitada[h.split('T')[1]] = val[6]
                     if lluvia_limitada:
                         df_precip = pd.DataFrame(list(lluvia_limitada.values()), index=list(lluvia_limitada.keys()), columns=["Lluvia (mm)"])
                         st.bar_chart(df_precip, color="#2563eb")
                     else: st.info("Sin pronóstico de lluvia estructurado.")
                 else: st.info("Sin pronóstico de lluvia en S3.")
 
-        # --- FILA 2: CARGA OPERATIVA Y AEROLÍNEAS ---
         row2_col1, row2_col2 = st.columns(2)
         with row2_col1:
             with st.container(border=True):
@@ -449,15 +449,14 @@ with tab4:
                     conteo_al.columns = ["Aerolínea", "Vuelos"]
                     st.altair_chart(alt.Chart(conteo_al.head(10)).mark_bar(color="#2563eb", cornerRadiusEnd=4).encode(x=alt.X("Aerolínea", sort="-y", axis=alt.Axis(grid=False, labelAngle=-45)), y=alt.Y("Vuelos", axis=alt.Axis(grid=True, gridColor="#e2e8f0")), tooltip=["Aerolínea", "Vuelos"]).properties(height=300).configure_view(strokeWidth=0), use_container_width=True)
                 else: st.info("No hay suficientes datos en esta franja horaria.")
-        
-        # --- FILA 3: METAR y TAF ---
+
         st.markdown("---")
         st.markdown(f"### 📋 Reportes Aeronáuticos (METAR / TAF) - {aeropuerto_destino}")
         m_t = metar_taf.get(aeropuerto_destino, {})
         c_metar, c_taf = st.columns(2)
-        with c_metar: 
+        with c_metar:
             st.markdown("**METAR:**")
             st.code(m_t.get('metar', 'Sin METAR en S3'), language='text')
-        with c_taf: 
+        with c_taf:
             st.markdown("**TAF:**")
             st.code(m_t.get('taf', 'Sin TAF en S3'), language='text')
