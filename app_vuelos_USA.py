@@ -17,10 +17,11 @@ st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️
 # --- ESTILOS CSS PERSONALIZADOS ---
 st.markdown("""
     <style>
-    header {visibility: hidden;}
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {display: none;}
+    [data-testid="stToolbar"] {visibility: hidden;}
+    [data-testid="stDecoration"] {display: none;}
     header {background-color: transparent !important;}
     .block-container { padding-top: 2rem; padding-bottom: 1rem; }
     [data-testid="stMetric"] {
@@ -29,15 +30,6 @@ st.markdown("""
         padding: 15px;
         border-radius: 8px;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-    }
-    /* Mantener visible el botón de sidebar en móvil */
-    [data-testid="stSidebarCollapsedControl"] {
-        visibility: visible !important;
-        display: block !important;
-    }
-    [data-testid="collapsedControl"] {
-        visibility: visible !important;
-        display: block !important;
     }
     </style>
 """, unsafe_allow_html=True)
