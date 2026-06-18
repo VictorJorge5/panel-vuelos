@@ -136,17 +136,40 @@ def obtener_url_radar_lluvia():
     except:
         return None
 
+class FotoNoDisponibleError(Exception):
+    """Error transitorio (timeout, rate-limit, etc.) al pedir la foto. Al heredar de
+    Exception y NO capturarla dentro de la función cacheada, st.cache_data NO
+    guarda este resultado, así que en la próxima carga se reintenta en vez de
+    quedar 'atascado' como fallo durante 24h (ttl de la caché)."""
+    pass
+
+def _llamar_planespotters(matricula):
+    """Hace la llamada real a Planespotters. Devuelve (foto_url, foto_link, fotografo, error).
+    error es None si todo fue bien (incluso si simplemente no hay fotos en la base)."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://www.planespotters.net/',
+    }
+    try:
+        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
+        if r.status_code == 200:
+            fotos = r.json().get('photos')
+            if fotos:
+                return fotos[0]['thumbnail_large']['src'], fotos[0]['link'], fotos[0].get('photographer'), None
+            return None, None, None, None  # 200 OK pero sin fotos: no es un error, no hay que reintentar
+        return None, None, None, f"HTTP {r.status_code}"
+    except Exception as e:
+        return None, None, None, f"{type(e).__name__}: {e}"
+
 @st.cache_data(ttl=86400)
 def obtener_foto_aeronave_ia(matricula):
     if not matricula or matricula == "N/A": return None, None, None
-    try:
-        time.sleep(0.3)
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
-        if r.status_code == 200 and r.json().get('photos'):
-            return r.json()['photos'][0]['thumbnail_large']['src'], r.json()['photos'][0]['link'], r.json()['photos'][0]['photographer']
-    except Exception: pass
-    return None, None, None
+    time.sleep(0.3)
+    foto_url, foto_link, fotografo, error = _llamar_planespotters(matricula)
+    if error:
+        raise FotoNoDisponibleError(error)
+    return foto_url, foto_link, fotografo
 
 def obtener_iata_seguro(nodo):
     try: return nodo['code'].get('iata', 'N/A') if isinstance(nodo, dict) and isinstance(nodo.get('code'), dict) else 'N/A'
@@ -243,11 +266,17 @@ for v in vuelos_aire:
 # DESCARGA DE FOTOS ASÍNCRONA
 matriculas_mapa = list(set([v.get('matricula', 'N/A') for v in vuelos_aire_filtrados if v.get('matricula', 'N/A') != 'N/A']))
 dicc_fotos = {}
+errores_fotos = {}
 if matriculas_mapa:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futuros = {executor.submit(obtener_foto_aeronave_ia, mat): mat for mat in matriculas_mapa}
         for f in concurrent.futures.as_completed(futuros):
-            dicc_fotos[futuros[f]] = f.result()
+            mat = futuros[f]
+            try:
+                dicc_fotos[mat] = f.result()
+            except Exception as e:
+                dicc_fotos[mat] = (None, None, None)
+                errores_fotos[mat] = str(e)
 
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
@@ -279,6 +308,10 @@ st.divider()
 tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar en Vivo", "🛬 Panel de Llegadas", "🛫 Panel de Salidas", "📊 Dashboard Analítico"])
 
 with tab1:
+    if errores_fotos:
+        with st.expander(f"⚠️ Diagnóstico: {len(errores_fotos)} foto(s) no se pudieron descargar (clic para ver el error real)"):
+            for mat, err in list(errores_fotos.items())[:10]:
+                st.code(f"{mat}: {err}", language="text")
     map_center = [39.5, -98.35] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 5, tiles="CartoDB dark_matter")
     url_lluvia = obtener_url_radar_lluvia()
