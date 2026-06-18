@@ -159,7 +159,7 @@ if st.sidebar.button("🔄 Refrescar Datos Ahora"):
     st.rerun()
 
 target_iatas = list(AEROPUERTOS.keys()) if aeropuerto_destino == "TODOS" else [aeropuerto_destino]
-nombre_mostrar = "Estados Unidos (Global)" if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["nombre"]
+nombre_mostrar = "Global" if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["nombre"]
 
 # --- FILTROS LATERALES AVANZADOS ---
 st.sidebar.divider()
