@@ -94,6 +94,10 @@ AEROPUERTOS = {
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
 
+# Diagnóstico de fallos al pedir fotos a Planespotters (se resetea cada rerun
+# del script; se rellena solo cuando una matrícula falla de verdad)
+_errores_fotos = {}
+
 # --- FUNCIONES DE APOYO ---
 def calcular_distancia_nm(lat1, lon1, lat2, lon2):
     R = 3440.065
@@ -113,14 +117,54 @@ def obtener_url_radar_lluvia():
 
 @st.cache_data(ttl=86400)
 def obtener_foto_aeronave_ia(matricula):
-    if not matricula or matricula == "N/A": return None, None, None
-    try:
-        time.sleep(0.3)
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
-        if r.status_code == 200 and r.json().get('photos'):
-            return r.json()['photos'][0]['thumbnail_large']['src'], r.json()['photos'][0]['link'], r.json()['photos'][0]['photographer']
-    except Exception: pass
+    if not matricula or matricula == "N/A":
+        return None, None, None
+
+    url = f"https://api.planespotters.net/pub/photos/reg/{matricula}"
+    # Headers de navegador completos: el endpoint vive detrás de Cloudflare y
+    # con solo el User-Agent original a veces deja pasar la petición y a veces
+    # no. Referer/Origin/Accept apuntando al propio dominio reducen mucho el
+    # bloqueo por hotlink/bot-protection.
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Referer": "https://www.planespotters.net/",
+        "Origin": "https://www.planespotters.net",
+    }
+
+    ultimo_error = "Sin detalle"
+    for intento in range(3):
+        try:
+            time.sleep(0.3 if intento == 0 else 0.8 * intento)
+            r = requests.get(url, headers=headers, timeout=10)
+            content_type = r.headers.get("content-type", "")
+            if r.status_code == 200 and "json" in content_type:
+                fotos = r.json().get("photos") or []
+                if not fotos:
+                    return None, None, None  # matrícula sin fotos en la base de datos
+                foto = fotos[0]
+                thumb = foto.get("thumbnail_large") or foto.get("thumbnail") or {}
+                src = thumb.get("src")
+                if src:
+                    return src, foto.get("link"), foto.get("photographer")
+                ultimo_error = "Respuesta sin campo de imagen (thumbnail/thumbnail_large)"
+                break
+            elif r.status_code == 429:
+                ultimo_error = "HTTP 429 (rate limit) — reintentando"
+                continue  # vale la pena reintentar
+            else:
+                ultimo_error = f"HTTP {r.status_code} (content-type: {content_type or 'desconocido'})"
+                break  # otros códigos (403, 5xx) no mejoran reintentando
+        except requests.exceptions.Timeout:
+            ultimo_error = "Timeout (>10s)"
+            continue
+        except Exception as e:
+            ultimo_error = f"{type(e).__name__}: {e}"
+            break
+
+    _errores_fotos[matricula] = ultimo_error
     return None, None, None
 
 def obtener_iata_seguro(nodo):
@@ -168,9 +212,9 @@ def clasificar_riesgo(pred_raw):
     # fracción 0-1 (p. ej. 0.444) y se convierte a porcentaje.
     porcentaje = valor if tiene_pct else (valor * 100 if valor <= 1 else valor)
 
-    if porcentaje < 20:
+    if porcentaje < 25:
         alerta, icono, color, etiqueta = "BAJA", "🟢", "green", "Baja"
-    elif porcentaje <= 34:
+    elif porcentaje <= 60:
         alerta, icono, color, etiqueta = "MEDIA", "🟠", "orange", "Media"
     else:
         alerta, icono, color, etiqueta = "ALTA", "🔴", "red", "Alta"
@@ -256,6 +300,11 @@ if matriculas_mapa:
         futuros = {executor.submit(obtener_foto_aeronave_ia, mat): mat for mat in matriculas_mapa}
         for f in concurrent.futures.as_completed(futuros):
             dicc_fotos[futuros[f]] = f.result()
+
+    if _errores_fotos:
+        with st.sidebar.expander(f"🛠️ Diagnóstico de fotos ({len(_errores_fotos)} sin cargar)"):
+            for mat, err in _errores_fotos.items():
+                st.caption(f"**{mat}** — {err}")
 
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
