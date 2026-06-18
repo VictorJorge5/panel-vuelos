@@ -93,32 +93,6 @@ AEROPUERTOS = {
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
 
-# Tabla de traducción ICAO -> Nombre comercial. Los vuelos "en vivo" (radar)
-# solo traen el código ICAO de la aerolínea, mientras que los vuelos
-# programados (llegadas/salidas) traen el nombre completo. Sin esta tabla,
-# el filtro de Aerolínea compara dos formatos distintos y nunca coinciden.
-ICAO_AEROLINEAS = {
-    "AAL": "American Airlines", "DAL": "Delta Air Lines", "UAL": "United Airlines",
-    "SWA": "Southwest Airlines", "JBU": "JetBlue Airways", "ASA": "Alaska Airlines",
-    "FFT": "Frontier Airlines", "NKS": "Spirit Airlines", "AAY": "Allegiant Air",
-    "ACA": "Air Canada", "BAW": "British Airways", "AFR": "Air France",
-    "DLH": "Lufthansa", "KLM": "KLM", "IBE": "Iberia", "VIR": "Virgin Atlantic",
-    "QTR": "Qatar Airways", "UAE": "Emirates", "ANA": "All Nippon Airways",
-    "JAL": "Japan Airlines", "KAL": "Korean Air", "AMX": "Aeroméxico",
-    "AVA": "Avianca", "CMP": "Copa Airlines", "LAN": "LATAM Airlines",
-    "ETD": "Etihad Airways", "SAS": "SAS", "TAP": "TAP Air Portugal",
-    "CLX": "Cargolux", "FDX": "FedEx Express", "UPS": "UPS Airlines",
-    "EDV": "Endeavor Air", "RPA": "Republic Airways", "SKW": "SkyWest Airlines",
-    "CPA": "Cathay Pacific", "SIA": "Singapore Airlines", "THY": "Turkish Airlines",
-}
-
-def traducir_aerolinea(icao):
-    """Convierte un código ICAO de aerolínea a su nombre comercial.
-    Si no está en la tabla, devuelve el propio código (mejor eso que perder el dato)."""
-    if not icao or icao == "N/A":
-        return "N/A"
-    return ICAO_AEROLINEAS.get(icao.strip().upper(), icao)
-
 # --- FUNCIONES DE APOYO ---
 def calcular_distancia_nm(lat1, lon1, lat2, lon2):
     R = 3440.065
@@ -136,40 +110,17 @@ def obtener_url_radar_lluvia():
     except:
         return None
 
-class FotoNoDisponibleError(Exception):
-    """Error transitorio (timeout, rate-limit, etc.) al pedir la foto. Al heredar de
-    Exception y NO capturarla dentro de la función cacheada, st.cache_data NO
-    guarda este resultado, así que en la próxima carga se reintenta en vez de
-    quedar 'atascado' como fallo durante 24h (ttl de la caché)."""
-    pass
-
-def _llamar_planespotters(matricula):
-    """Hace la llamada real a Planespotters. Devuelve (foto_url, foto_link, fotografo, error).
-    error es None si todo fue bien (incluso si simplemente no hay fotos en la base)."""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Referer': 'https://www.planespotters.net/',
-    }
-    try:
-        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
-        if r.status_code == 200:
-            fotos = r.json().get('photos')
-            if fotos:
-                return fotos[0]['thumbnail_large']['src'], fotos[0]['link'], fotos[0].get('photographer'), None
-            return None, None, None, None  # 200 OK pero sin fotos: no es un error, no hay que reintentar
-        return None, None, None, f"HTTP {r.status_code}"
-    except Exception as e:
-        return None, None, None, f"{type(e).__name__}: {e}"
-
 @st.cache_data(ttl=86400)
 def obtener_foto_aeronave_ia(matricula):
     if not matricula or matricula == "N/A": return None, None, None
-    time.sleep(0.3)
-    foto_url, foto_link, fotografo, error = _llamar_planespotters(matricula)
-    if error:
-        raise FotoNoDisponibleError(error)
-    return foto_url, foto_link, fotografo
+    try:
+        time.sleep(0.3)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        r = requests.get(f"https://api.planespotters.net/pub/photos/reg/{matricula}", headers=headers, timeout=10)
+        if r.status_code == 200 and r.json().get('photos'):
+            return r.json()['photos'][0]['thumbnail_large']['src'], r.json()['photos'][0]['link'], r.json()['photos'][0]['photographer']
+    except Exception: pass
+    return None, None, None
 
 def obtener_iata_seguro(nodo):
     try: return nodo['code'].get('iata', 'N/A') if isinstance(nodo, dict) and isinstance(nodo.get('code'), dict) else 'N/A'
@@ -230,7 +181,7 @@ for v in vuelos_aire:
     if not dest: dest = v.get('aeropuerto_referencia', '').strip().upper()
     if dest in target_iatas:
         callsign = v.get('callsign', 'N/A')
-        al_name = traducir_aerolinea(v.get('aerolinea_icao', 'N/A'))
+        al_name = v.get('aerolinea_icao', 'N/A')
         if callsign != "N/A": numeros_vuelo_disponibles.add(callsign)
         if al_name != "N/A": aerolineas_disponibles.add(al_name)
 
@@ -246,37 +197,22 @@ for v in vuelos_aire:
     if not destino:
         destino = v.get('aeropuerto_referencia', '').strip().upper()
     callsign = v.get('callsign', 'N/A')
-    aerolinea_vuelo = traducir_aerolinea(v.get('aerolinea_icao', 'N/A'))
+    aerolinea_vuelo = v.get('aerolinea_icao', 'N/A')
     if destino in target_iatas:
-        # Horas restantes hasta el destino, para poder aplicar el filtro de horas
-        # del panel lateral también al mapa en vivo (antes solo se usaba para mostrar el ETA).
-        velocidad_v = v.get('velocidad_nudos', 'N/A')
-        horas_restantes_v = calcular_distancia_nm(
-            v.get('latitud', 0), v.get('longitud', 0),
-            AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]
-        ) / max(velocidad_v if isinstance(velocidad_v, (int, float)) else 1, 1) if destino in AEROPUERTOS else 0
         if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
            (not filtro_vuelos or callsign in filtro_vuelos) and \
-           (not filtro_aerolineas or aerolinea_vuelo in filtro_aerolineas) and \
-           (horas_restantes_v <= horas_prediccion):
+           (not filtro_aerolineas or aerolinea_vuelo in filtro_aerolineas):
             v['destino_real'] = destino
-            v['horas_restantes'] = horas_restantes_v
             vuelos_aire_filtrados.append(v)
 
 # DESCARGA DE FOTOS ASÍNCRONA
 matriculas_mapa = list(set([v.get('matricula', 'N/A') for v in vuelos_aire_filtrados if v.get('matricula', 'N/A') != 'N/A']))
 dicc_fotos = {}
-errores_fotos = {}
 if matriculas_mapa:
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futuros = {executor.submit(obtener_foto_aeronave_ia, mat): mat for mat in matriculas_mapa}
         for f in concurrent.futures.as_completed(futuros):
-            mat = futuros[f]
-            try:
-                dicc_fotos[mat] = f.result()
-            except Exception as e:
-                dicc_fotos[mat] = (None, None, None)
-                errores_fotos[mat] = str(e)
+            dicc_fotos[futuros[f]] = f.result()
 
 # --- PANEL SUPERIOR ---
 st.title(f"✈️ Panel de Operaciones - {nombre_mostrar}")
@@ -308,10 +244,6 @@ st.divider()
 tab1, tab2, tab3, tab4 = st.tabs(["🗺️ Radar en Vivo", "🛬 Panel de Llegadas", "🛫 Panel de Salidas", "📊 Dashboard Analítico"])
 
 with tab1:
-    if errores_fotos:
-        with st.expander(f"⚠️ Diagnóstico: {len(errores_fotos)} foto(s) no se pudieron descargar (clic para ver el error real)"):
-            for mat, err in list(errores_fotos.items())[:10]:
-                st.code(f"{mat}: {err}", language="text")
     map_center = [39.5, -98.35] if aeropuerto_destino == "TODOS" else AEROPUERTOS[aeropuerto_destino]["coords"]
     mapa = folium.Map(location=map_center, zoom_start=4 if aeropuerto_destino == "TODOS" else 5, tiles="CartoDB dark_matter")
     url_lluvia = obtener_url_radar_lluvia()
@@ -331,7 +263,7 @@ with tab1:
         destino = vuelo.get('destino_real', 'N/A')
         origen = vuelo.get('origen', 'N/A').upper()
         callsign = vuelo.get('callsign', 'N/A')
-        aerolinea_nom = traducir_aerolinea(vuelo.get('aerolinea_icao', 'N/A'))
+        aerolinea_nom = vuelo.get('aerolinea_icao', 'N/A')
         altitud = vuelo.get('altitud', 'N/A')
         velocidad = vuelo.get('velocidad_nudos', 'N/A')
         rumbo = vuelo.get('rumbo', 'N/A')
@@ -340,7 +272,7 @@ with tab1:
         v_speed = vuelo.get('velocidad_vertical', 0)
         v_speed_str = f"+{v_speed}" if v_speed > 0 else str(v_speed)
         v_speed_color = "green" if v_speed > 0 else "red" if v_speed < 0 else "gray"
-        horas_restantes = vuelo.get('horas_restantes', 0)
+        horas_restantes = calcular_distancia_nm(vuelo.get('latitud', 0), vuelo.get('longitud', 0), AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(velocidad if isinstance(velocidad, (int, float)) else 1, 1) if destino in AEROPUERTOS else 0
         eta = hora_actual + timedelta(hours=horas_restantes)
         pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "alerta": "BAJA", "color": "gray", "icono": "⚪"})
         if pred['alerta'] in filtros_activos:
