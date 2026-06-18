@@ -5,6 +5,7 @@ from streamlit_folium import st_folium
 import boto3
 import json
 import math
+import re
 import requests
 import concurrent.futures
 import time
@@ -137,6 +138,48 @@ def obtener_aerolinea_segura(vuelo_dict):
 def obtener_timestamp_seguro(vuelo_dict, tipo_vuelo, tipo_tiempo):
     try: return vuelo_dict['flight']['time'][tipo_tiempo].get(tipo_vuelo) if isinstance(vuelo_dict, dict) and 'flight' in vuelo_dict else None
     except: return None
+
+# --- RECLASIFICACIÓN DE RIESGO IA SEGÚN UMBRALES DEL TFM (pág. 39) ---
+# 🟢 Verde  (BAJA)  -> probabilidad de incidencia < 25%
+# 🟠 Naranja (MEDIA) -> probabilidad de incidencia entre 25% y 60%
+# 🔴 Rojo   (ALTA)  -> probabilidad de incidencia > 60%
+#
+# La predicción numérica (prob_texto) llega ya calculada desde el modelo en S3,
+# pero la etiqueta/color/icono pueden venir con otro criterio. Esta función
+# recalcula siempre alerta/icono/color/prob_texto a partir del valor numérico,
+# para que la app aplique exactamente los umbrales oficiales del TFM con
+# independencia de cómo se haya etiquetado el dato en origen.
+def clasificar_riesgo(pred_raw):
+    pred = dict(pred_raw) if isinstance(pred_raw, dict) else {}
+    texto_original = str(pred.get("prob_texto", "N/A"))
+    match = re.search(r"(\d+(?:\.\d+)?)\s*%?", texto_original)
+
+    if not match:
+        pred.setdefault("alerta", "BAJA")
+        pred.setdefault("icono", "⚪")
+        pred.setdefault("color", "gray")
+        pred.setdefault("prob_texto", "N/A")
+        return pred
+
+    valor_str = match.group(1)
+    valor = float(valor_str)
+    tiene_pct = "%" in texto_original
+    # Si el texto trae "%", el valor ya está en escala 0-100. Si no, se asume
+    # fracción 0-1 (p. ej. 0.444) y se convierte a porcentaje.
+    porcentaje = valor if tiene_pct else (valor * 100 if valor <= 1 else valor)
+
+    if porcentaje < 25:
+        alerta, icono, color, etiqueta = "BAJA", "🟢", "green", "Baja"
+    elif porcentaje <= 60:
+        alerta, icono, color, etiqueta = "MEDIA", "🟠", "orange", "Media"
+    else:
+        alerta, icono, color, etiqueta = "ALTA", "🔴", "red", "Alta"
+
+    pred["alerta"] = alerta
+    pred["icono"] = icono
+    pred["color"] = color
+    pred["prob_texto"] = f"{etiqueta} {valor_str}{'%' if tiene_pct else ''}"
+    return pred
 
 # --- BARRA LATERAL ---
 st.sidebar.title("⚙️ Configuración")
@@ -274,7 +317,7 @@ with tab1:
         v_speed_color = "green" if v_speed > 0 else "red" if v_speed < 0 else "gray"
         horas_restantes = calcular_distancia_nm(vuelo.get('latitud', 0), vuelo.get('longitud', 0), AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(velocidad if isinstance(velocidad, (int, float)) else 1, 1) if destino in AEROPUERTOS else 0
         eta = hora_actual + timedelta(hours=horas_restantes)
-        pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "alerta": "BAJA", "color": "gray", "icono": "⚪"})
+        pred = clasificar_riesgo(predicciones_ia.get(callsign, {"prob_texto": "N/A"}))
         if pred['alerta'] in filtros_activos:
             hora_eta_str = eta.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:00")
             meteo_dest = dicc_meteo.get(destino, {}).get(hora_eta_str)
@@ -325,7 +368,7 @@ with tab2:
                     al = obtener_aerolinea_segura(v)
                     num = obtener_num_vuelo_seguro(v)
                     cid = str(f_data.get('identification', {}).get('callsign', '')).strip().upper()
-                    pred = predicciones_ia.get(cid, {"prob_texto": "N/A", "icono": "⚪", "alerta": "BAJA"})
+                    pred = clasificar_riesgo(predicciones_ia.get(cid, {"prob_texto": "N/A"}))
                     if pred['alerta'] in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and \
                        (not filtro_aeropuertos or orig in filtro_aeropuertos or target in filtro_aeropuertos) and \
                        (not filtro_vuelos or num in filtro_vuelos):
@@ -354,7 +397,7 @@ with tab3:
                     al = obtener_aerolinea_segura(v)
                     num = obtener_num_vuelo_seguro(v)
                     cid = str(f_data.get('identification', {}).get('callsign', '')).strip().upper()
-                    pred = predicciones_ia.get(cid, {"prob_texto": "N/A", "icono": "⚪", "alerta": "BAJA"})
+                    pred = clasificar_riesgo(predicciones_ia.get(cid, {"prob_texto": "N/A"}))
                     if pred['alerta'] in filtros_activos and (not filtro_aerolineas or al in filtro_aerolineas) and \
                        (not filtro_aeropuertos or target in filtro_aeropuertos or dest in filtro_aeropuertos) and \
                        (not filtro_vuelos or num in filtro_vuelos):
