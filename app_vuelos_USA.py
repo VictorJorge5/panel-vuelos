@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 import altair as alt
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="IA Control de Operaciones USA", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Control de Operaciones", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
 
 # --- ESTILOS CSS PERSONALIZADOS ---
 st.markdown("""
