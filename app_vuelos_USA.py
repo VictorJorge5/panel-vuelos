@@ -168,9 +168,9 @@ def clasificar_riesgo(pred_raw):
     # fracción 0-1 (p. ej. 0.444) y se convierte a porcentaje.
     porcentaje = valor if tiene_pct else (valor * 100 if valor <= 1 else valor)
 
-    if porcentaje < 25:
+    if porcentaje < 20:
         alerta, icono, color, etiqueta = "BAJA", "🟢", "green", "Baja"
-    elif porcentaje <= 60:
+    elif porcentaje <= 34:
         alerta, icono, color, etiqueta = "MEDIA", "🟠", "orange", "Media"
     else:
         alerta, icono, color, etiqueta = "ALTA", "🔴", "red", "Alta"
