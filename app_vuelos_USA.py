@@ -93,6 +93,32 @@ AEROPUERTOS = {
     "JFK": {"nombre": "New York JFK", "coords": [40.6413, -73.7781]}
 }
 
+# Tabla de traducción ICAO -> Nombre comercial. Los vuelos "en vivo" (radar)
+# solo traen el código ICAO de la aerolínea, mientras que los vuelos
+# programados (llegadas/salidas) traen el nombre completo. Sin esta tabla,
+# el filtro de Aerolínea compara dos formatos distintos y nunca coinciden.
+ICAO_AEROLINEAS = {
+    "AAL": "American Airlines", "DAL": "Delta Air Lines", "UAL": "United Airlines",
+    "SWA": "Southwest Airlines", "JBU": "JetBlue Airways", "ASA": "Alaska Airlines",
+    "FFT": "Frontier Airlines", "NKS": "Spirit Airlines", "AAY": "Allegiant Air",
+    "ACA": "Air Canada", "BAW": "British Airways", "AFR": "Air France",
+    "DLH": "Lufthansa", "KLM": "KLM", "IBE": "Iberia", "VIR": "Virgin Atlantic",
+    "QTR": "Qatar Airways", "UAE": "Emirates", "ANA": "All Nippon Airways",
+    "JAL": "Japan Airlines", "KAL": "Korean Air", "AMX": "Aeroméxico",
+    "AVA": "Avianca", "CMP": "Copa Airlines", "LAN": "LATAM Airlines",
+    "ETD": "Etihad Airways", "SAS": "SAS", "TAP": "TAP Air Portugal",
+    "CLX": "Cargolux", "FDX": "FedEx Express", "UPS": "UPS Airlines",
+    "EDV": "Endeavor Air", "RPA": "Republic Airways", "SKW": "SkyWest Airlines",
+    "CPA": "Cathay Pacific", "SIA": "Singapore Airlines", "THY": "Turkish Airlines",
+}
+
+def traducir_aerolinea(icao):
+    """Convierte un código ICAO de aerolínea a su nombre comercial.
+    Si no está en la tabla, devuelve el propio código (mejor eso que perder el dato)."""
+    if not icao or icao == "N/A":
+        return "N/A"
+    return ICAO_AEROLINEAS.get(icao.strip().upper(), icao)
+
 # --- FUNCIONES DE APOYO ---
 def calcular_distancia_nm(lat1, lon1, lat2, lon2):
     R = 3440.065
@@ -181,7 +207,7 @@ for v in vuelos_aire:
     if not dest: dest = v.get('aeropuerto_referencia', '').strip().upper()
     if dest in target_iatas:
         callsign = v.get('callsign', 'N/A')
-        al_name = v.get('aerolinea_icao', 'N/A')
+        al_name = traducir_aerolinea(v.get('aerolinea_icao', 'N/A'))
         if callsign != "N/A": numeros_vuelo_disponibles.add(callsign)
         if al_name != "N/A": aerolineas_disponibles.add(al_name)
 
@@ -197,12 +223,21 @@ for v in vuelos_aire:
     if not destino:
         destino = v.get('aeropuerto_referencia', '').strip().upper()
     callsign = v.get('callsign', 'N/A')
-    aerolinea_vuelo = v.get('aerolinea_icao', 'N/A')
+    aerolinea_vuelo = traducir_aerolinea(v.get('aerolinea_icao', 'N/A'))
     if destino in target_iatas:
+        # Horas restantes hasta el destino, para poder aplicar el filtro de horas
+        # del panel lateral también al mapa en vivo (antes solo se usaba para mostrar el ETA).
+        velocidad_v = v.get('velocidad_nudos', 'N/A')
+        horas_restantes_v = calcular_distancia_nm(
+            v.get('latitud', 0), v.get('longitud', 0),
+            AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]
+        ) / max(velocidad_v if isinstance(velocidad_v, (int, float)) else 1, 1) if destino in AEROPUERTOS else 0
         if (not filtro_aeropuertos or origen in filtro_aeropuertos or destino in filtro_aeropuertos) and \
            (not filtro_vuelos or callsign in filtro_vuelos) and \
-           (not filtro_aerolineas or aerolinea_vuelo in filtro_aerolineas):
+           (not filtro_aerolineas or aerolinea_vuelo in filtro_aerolineas) and \
+           (horas_restantes_v <= horas_prediccion):
             v['destino_real'] = destino
+            v['horas_restantes'] = horas_restantes_v
             vuelos_aire_filtrados.append(v)
 
 # DESCARGA DE FOTOS ASÍNCRONA
@@ -263,7 +298,7 @@ with tab1:
         destino = vuelo.get('destino_real', 'N/A')
         origen = vuelo.get('origen', 'N/A').upper()
         callsign = vuelo.get('callsign', 'N/A')
-        aerolinea_nom = vuelo.get('aerolinea_icao', 'N/A')
+        aerolinea_nom = traducir_aerolinea(vuelo.get('aerolinea_icao', 'N/A'))
         altitud = vuelo.get('altitud', 'N/A')
         velocidad = vuelo.get('velocidad_nudos', 'N/A')
         rumbo = vuelo.get('rumbo', 'N/A')
@@ -272,7 +307,7 @@ with tab1:
         v_speed = vuelo.get('velocidad_vertical', 0)
         v_speed_str = f"+{v_speed}" if v_speed > 0 else str(v_speed)
         v_speed_color = "green" if v_speed > 0 else "red" if v_speed < 0 else "gray"
-        horas_restantes = calcular_distancia_nm(vuelo.get('latitud', 0), vuelo.get('longitud', 0), AEROPUERTOS[destino]["coords"][0], AEROPUERTOS[destino]["coords"][1]) / max(velocidad if isinstance(velocidad, (int, float)) else 1, 1) if destino in AEROPUERTOS else 0
+        horas_restantes = vuelo.get('horas_restantes', 0)
         eta = hora_actual + timedelta(hours=horas_restantes)
         pred = predicciones_ia.get(callsign, {"prob_texto": "N/A", "alerta": "BAJA", "color": "gray", "icono": "⚪"})
         if pred['alerta'] in filtros_activos:
